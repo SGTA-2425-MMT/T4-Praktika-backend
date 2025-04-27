@@ -13,7 +13,7 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
     targ = req.target
     gs = game.game_state
 
-    if code === "level_up":
+    if code == "level_up":
         if targ.type != "city":
             return CheatResponse(
                 success=False,
