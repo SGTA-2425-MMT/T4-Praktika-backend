@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+motor
+python-jose[cryptography]
+httpx
+python-dotenv
+groq
