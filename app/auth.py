@@ -61,6 +61,7 @@ async def verify_token(
             token,
             public_key,
             algorithms=[unverified_header["alg"]],
+            audience=actual_aud,
             issuer=actual_iss,
             options={
                 "verify_signature": True,

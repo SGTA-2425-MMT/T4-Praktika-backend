@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from typing import Any
+from typing import Annotated, Any
 import httpx
 from app.config import settings
 from app.schemas import TokenRequest, TokenResponse, ProfileUpdate, UserOut
@@ -115,6 +115,7 @@ async def login(form_data: TokenRequest):
         "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
         "username": form_data.username,
         "password": form_data.password,
+        "scope": "openid"
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=data)
@@ -134,24 +135,58 @@ async def get_profile(claims: dict = Depends(verify_token)):
     """
     Call Keycloak’s userinfo endpoint and return the core fields.
     """
+    base = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
+
+
     url = (
-        f"{settings.KEYCLOAK_BASE_URL}realms/"
+        f"{base}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/userinfo"
     )
     print(claims)
     headers = {"Authorization": f"Bearer {claims['token']}"}
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
+        try:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not feth user info - token not valid for userinfo"
+            )
+        
         info = resp.json()
 
-    return {
-        "_id": info["sub"],
-        "username": info.get("preferred_username"),
-        "email": info.get("email"),
-        "created_at": None,
-        "last_login": None,
+    return UserOut(
+        sub=info["sub"],
+        username=info.get("preferred_username"),
+        email=info.get("email"),
+        created_at=None,
+        last_login=None
+    )
+
+@router.post("/logout")
+async def logout(refresh_token: Annotated[str, Body(..., embed=True)], claims: dict = Depends(verify_token)):
+    """
+    Call Keycloak’s logout endpoint.
+    """
+    base = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
+
+    url = (
+        f"{base}/realms/"
+        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/logout"
+    )
+
+    data = {
+        "client_id": settings.KEYCLOAK_CLIENT_ID,
+        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+        "refresh_token": refresh_token,
     }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, data=data)
+        resp.raise_for_status()
+
+    return {"message": "Logged out"}
 
 
 @router.put("/profile", response_model=UserOut)
