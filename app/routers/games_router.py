@@ -29,8 +29,8 @@ async def create_game(
     game: GameCreate, claims: dict = Depends(verify_token)
 ):
     user_id = _get_user_objid(claims)
-    now = datetime.utcnow()
-    obj = game.dict()
+    now = datetime.now(datetime.timezone.utc)
+    obj = game.model_dump()
     obj.update(
         {
             "user_id": user_id,
@@ -67,10 +67,10 @@ async def save_game(
     Persist a manual save.
     """
     objid = ObjectId(game_id)
-    now = datetime.utcnow()
+    now = datetime.now(datetime.timezone.utc)
     update = {
         "$set": {
-            "game_state": game_state.dict(),
+            "game_state": game_state.model_dump(),
             "last_saved": now,
             "is_autosave": False,
         }
@@ -107,8 +107,8 @@ async def player_action(
         {"_id": object_id},
         {
             "$set": {
-                "game_state": gs.dict(),
-                "last_saved": datetime.utcnow()
+                "game_state": gs.model_dump(),
+                "last_saved": datetime.now(datetime.timezone.utc)
             }
         }
     )
@@ -172,7 +172,9 @@ async def cheat(
         {
             "$set": {
                 "game_state": cheat_res.game_state.dict(),
-                "last_saved": datetime.utcnow()
+                "last_saved": datetime.now(datetime.timezone.utc),
+                "is_autosave": False,
+                "cheats_used": game.cheats_used + [req.cheat_code],
             }
         }
     )
