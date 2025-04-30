@@ -19,9 +19,12 @@ async def register(
     1) Fetch an admin access_token from Keycloak
     2) Create a new Keycloak user
     """
+    # Ensure no trailing slash in KEYCLOAK_BASE_URL
+    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
+
     # 1. get admin token
     token_url = (
-        f"{settings.KEYCLOAK_BASE_URL}/realms/"
+        f"{base_url}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     )
     data = {
@@ -31,12 +34,20 @@ async def register(
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=data)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            detail = (
+                f"Failed to get admin token: {resp.text} "
+                f"(status {resp.status_code}). "
+            )
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=detail
+            )
         admin_token = resp.json()["access_token"]
 
     # 2. create the user
     user_url = (
-        f"{settings.KEYCLOAK_BASE_URL}/admin/realms/"
+        f"{base_url}/admin/realms/"
         f"{settings.KEYCLOAK_REALM}/users"
     )
     payload = {
@@ -52,9 +63,39 @@ async def register(
     async with httpx.AsyncClient() as client:
         resp = await client.post(user_url, json=payload, headers=headers)
         if resp.status_code != 201:
-            raise HTTPException(
-                status_code=resp.status_code, detail=resp.text
+            detail = (
+                f"Failed to create user: {resp.text} "
+                f"(status {resp.status_code}). "
             )
+            raise HTTPException(
+                status_code=resp.status_code, detail=detail
+            )
+
+        # Get the user id from the Location header
+        location = resp.headers.get("Location")
+        user_id = None
+        if location:
+            user_id = location.rstrip('/').split('/')[-1]
+        if not user_id:
+            # fallback: try to get user by username
+            search_url = (
+                f"{base_url}/admin/realms/"
+                f"{settings.KEYCLOAK_REALM}/users?username={username}"
+            )
+            search_resp = await client.get(search_url, headers=headers)
+            if search_resp.status_code == 200 and search_resp.json():
+                user_id = search_resp.json()[0].get("id")
+
+        # Send verification email if user_id found
+        if user_id:
+            verify_url = (
+                f"{base_url}/admin/realms/"
+                f"{settings.KEYCLOAK_REALM}/users/{user_id}/send-verify-email"
+            )
+            verify_resp = await client.put(verify_url, headers=headers)
+            if verify_resp.status_code not in (204, 202):
+                # Not fatal, but log/send info if needed
+                pass
 
     return {"message": "user created"}
 
@@ -78,8 +119,12 @@ async def login(form_data: TokenRequest):
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=data)
         if resp.status_code != 200:
+            detail = (
+                f"Failed to login: {resp.text} "
+                f"(status {resp.status_code}). "
+            )
             raise HTTPException(
-                status_code=resp.status_code, detail=resp.text
+                status_code=resp.status_code, detail=detail
             )
         return resp.json()
 
@@ -90,9 +135,10 @@ async def get_profile(claims: dict = Depends(verify_token)):
     Call Keycloak’s userinfo endpoint and return the core fields.
     """
     url = (
-        f"{settings.KEYCLOAK_BASE_URL}/realms/"
+        f"{settings.KEYCLOAK_BASE_URL}realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/userinfo"
     )
+    print(claims)
     headers = {"Authorization": f"Bearer {claims['token']}"}
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, headers=headers)
@@ -131,24 +177,24 @@ async def update_profile(
         admin_token = resp.json()["access_token"]
 
     # 2) patch the user
+    headers = {"Authorization": f"Bearer {admin_token}"}
     user_id = claims["sub"]
+
+    if update.username or update.email:
+        payload = {}
+        if update.username:
+            payload['username'] = update.username
+        if update.email:
+            payload['email'] = update.email
+
     user_url = (
         f"{settings.KEYCLOAK_BASE_URL}/admin/realms/"
         f"{settings.KEYCLOAK_REALM}/users/{user_id}"
     )
-    payload: dict = {}
-    if update.username is not None:
-        payload["username"] = update.username
-    if update.email is not None:
-        payload["email"] = update.email
 
-    headers = {"Authorization": f"Bearer {admin_token}"}
     async with httpx.AsyncClient() as client:
         resp = await client.put(user_url, json=payload, headers=headers)
-        if resp.status_code not in (200, 204):
-            raise HTTPException(
-                status_code=resp.status_code, detail=resp.text
-            )
+        resp.raise_for_status()
 
     # Return updated info
     return await get_profile(claims)
