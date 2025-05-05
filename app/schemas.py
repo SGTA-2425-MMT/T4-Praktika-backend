@@ -43,6 +43,17 @@ class ProfileUpdate(BaseModel):
     username: Optional[str]
     email: Optional[str]
 
+class UserOut(BaseModel):
+    id: str = Field(alias="sub")
+    username: Optional[str]
+    email: Optional[str]
+    created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
+
+    class Config:
+        allow_population_by_field_name = True
+        orm_mode = True
+
 
 # ─── Cheat System ───────────────────────────────────────────────────────────────
 
