@@ -179,3 +179,11 @@ include/
 lib/
 lib64/
 pyvenv.cfg
+
+# VS Code
+.vscode/
+.vscode-test/
+
+# IntelliJ IDEA
+.idea/
+.idea_modules/

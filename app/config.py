@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # For admin API (registration and user management)
     KEYCLOAK_ADMIN_CLIENT_ID: str
     KEYCLOAK_ADMIN_CLIENT_SECRET: str
+    GROQ_API_KEY: str
 
     class Config:
         env_file = ".env"
