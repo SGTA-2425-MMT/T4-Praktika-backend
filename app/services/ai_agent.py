@@ -117,7 +117,20 @@ def get_ai_actions(gs: GameState) -> Dict[str, Any]:
     response = completion.choices[0].message.content
 
     # Try to extract the first JSON code block
-    json_match = re.search(r"```json\s*({.*?})\s*```", response, re.DOTALL)
+    import logging
+    logging.basicConfig(level=logging.ERROR)
+
+    try:
+        json_match = re.search(r"```json\s*({[^}]*})\s*```", response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Fallback: try to find the first {...} block
+            json_match = re.search(r"({.*})", response, re.DOTALL)
+            json_str = json_match.group(1) if json_match else "{}"
+    except Exception as e:
+        logging.error(f"Error extracting JSON from response: {e}")
+        json_str = "{}"
     if json_match:
         json_str = json_match.group(1)
     else:
