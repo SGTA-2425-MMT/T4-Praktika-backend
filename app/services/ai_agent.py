@@ -8,7 +8,7 @@ import re
 client = Groq(api_key=settings.GROQ_API_KEY)
 
 
-def get_ai_actions(gs: GameState) -> Dict[str, Any]:
+def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
     completion = client.chat.completions.create(
         messages=[
             {
@@ -306,16 +306,31 @@ def get_ai_actions(gs: GameState) -> Dict[str, Any]:
             "state_snapshot_after": {}    # Placeholder
         })
 
-    result = {
-        "ai_turn_summary": {
-            "total_actions": total_actions,
-            "main_focus": main_focus,
-            "resources_gained": resources_gained,
-            "territories_explored": territories_explored,
-            "combat_results": combat_results
-        },
-        "ai_actions_sequence": ai_actions_sequence
-    }
+    result = {}
+    if (debug):
+        result = {
+            "ai_turn_summary": {
+                "total_actions": total_actions,
+                "main_focus": main_focus,
+                "resources_gained": resources_gained,
+                "territories_explored": territories_explored,
+                "combat_results": combat_results
+            },
+            "ai_actions_sequence": ai_actions_sequence,
+            "reasoning": reasoning,
+            "analysis": analysis
+        }
+    else:
+        result = {
+            "ai_turn_summary": {
+                "total_actions": total_actions,
+                "main_focus": main_focus,
+                "resources_gained": resources_gained,
+                "territories_explored": territories_explored,
+                "combat_results": combat_results
+            },
+            "ai_actions_sequence": ai_actions_sequence
+        }
 
     return result
 
