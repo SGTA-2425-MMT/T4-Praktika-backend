@@ -247,6 +247,12 @@ async def end_turn(
     game = Game(**doc)
     gs: GameState = game.game_state
 
+    # --- Update explored area around all player cities before AI turn ---
+    for city in gs.player.cities:
+        loc = city.get("location")
+        if loc and isinstance(loc, dict) and "x" in loc and "y" in loc:
+            set_explored_radius(gs.map.explored, (loc["x"], loc["y"]), radius=2)
+
     # 3) Apply player end turn logic (update state as needed)
     # ...apply any player end turn logic here...
 
