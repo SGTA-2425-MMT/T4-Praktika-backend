@@ -51,8 +51,8 @@ class UserOut(BaseModel):
     last_login: Optional[datetime] = None
 
     class Config:
-        allow_population_by_field_name = True
-        orm_mode = True
+        validate_by_name = True
+        from_attributes = True
 
 
 # ─── Cheat System ───────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ class CheatResponse(BaseModel):
     game_state: GameState
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ─── Game Management ────────────────────────────────────────────────────────────
@@ -100,8 +100,8 @@ class GameOut(BaseModel):
     game_state: GameState
 
     class Config:
-        allow_population_by_field_name = True
-        orm_mode = True
+        validate_by_name = True
+        from_attributes = True
 
 class ScenarioOut(BaseModel):
     id: str = Field(alias="_id")
@@ -112,5 +112,5 @@ class ScenarioOut(BaseModel):
     initial_state: Dict[str, Any]
 
     class Config:
-        allow_population_by_field_name = True
-        orm_mode = True
+        validate_by_name = True
+        from_attributes = True
