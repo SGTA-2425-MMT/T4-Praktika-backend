@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:alpine
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -8,9 +8,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Install system dependencies (if needed)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update && apk add --no-cache build-base
 
 # Install Python dependencies
 COPY requirements.txt .
