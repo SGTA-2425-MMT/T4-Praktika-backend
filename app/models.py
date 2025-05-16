@@ -9,7 +9,7 @@ class PyObjectId(ObjectId):
         yield cls.validate
 
     @classmethod
-    def validate(cls, v):
+    def validate(cls, v, *args, **kwargs):  # <-- Accept extra args for Pydantic v2 compatibility
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid ObjectId")
         return ObjectId(v)
@@ -24,7 +24,7 @@ class User(BaseModel):
 
     class Config:
         json_encoders = { ObjectId: str }
-        allow_population_by_field_name = True
+        validate_by_name = True
 
 class GameStatePlayer(BaseModel):
     cities: List[Dict[str, Any]]
@@ -50,7 +50,7 @@ class GameState(BaseModel):
 
 class Game(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id")
-    user_id: PyObjectId
+    user_id: str  # <-- Change from PyObjectId to str
     name: str
     scenario_id: str
     created_at: datetime
@@ -61,7 +61,7 @@ class Game(BaseModel):
 
     class Config:
         json_encoders = { ObjectId: str }
-        allow_population_by_field_name = True
+        validate_by_name = True
 
 class Scenario(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id")
@@ -73,4 +73,4 @@ class Scenario(BaseModel):
 
     class Config:
         json_encoders = { ObjectId: str }
-        allow_population_by_field_name = True
+        validate_by_name = True

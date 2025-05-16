@@ -1,0 +1,330 @@
+### 1. Register a new user (POST /api/auth/register)
+POST http://localhost:8000/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "testuser1",
+  "email": "testuser1@example.com",
+  "password": "TestPassword123!"
+}
+
+###
+
+### 2. Login (POST /api/auth/login)
+POST http://localhost:8000/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "testuser1",
+  "password": "TestPassword123!"
+}
+
+###
+
+### 3. Get profile (GET /api/auth/profile)
+GET http://localhost:8000/api/auth/profile
+Authorization: Bearer {{access_token}}
+
+###
+
+### 4. Update profile (PUT /api/auth/profile)
+PUT http://localhost:8000/api/auth/profile
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "username": "testuser1_renamed",
+  "email": "testuser1_new@example.com"
+}
+
+###
+
+### 5. Create a new game (POST /api/games)
+POST http://localhost:8000/api/games
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "name": "Test Game 1",
+  "scenario_id": "default_scenario",
+  "game_state": {
+    "turn": 1,
+    "current_player": "player",
+    "player": {
+      "cities": [
+        {
+          "id": "city1",
+          "name": "Alpha",
+          "location": {"x": 2, "y": 3},
+          "buildings": ["granary"],
+          "population": 5,
+          "owner": "player"
+        }
+      ],
+      "units": [
+        {
+          "id": "unit1",
+          "type": "warrior",
+          "location": {"x": 2, "y": 4},
+          "owner": "player",
+          "movement_points": 2
+        }
+      ],
+      "technologies": [
+        { "name": "Pottery", "turns_remaining": 3 }
+      ],
+      "resources": {
+        "wheat": { "location": {"x": 3, "y": 3}, "improved": false }
+      }
+    },
+    "ai": {
+      "cities": [],
+      "units": [],
+      "technologies": [],
+      "resources": {}
+    },
+    "map": {
+      "size": { "width": 10, "height": 10 },
+      "explored": [[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0]],
+      "visible_objects": []
+    }
+  }
+}
+
+###
+
+### 6. List games (GET /api/games)
+GET http://localhost:8000/api/games
+Authorization: Bearer {{access_token}}
+
+###
+
+### 7. Get a game by ID (GET /api/games/{game_id})
+GET http://localhost:8000/api/games/{{game_id}}
+Authorization: Bearer {{access_token}}
+
+###
+
+### 8. Save game (POST /api/games/{game_id}/save)
+POST http://localhost:8000/api/games/{{game_id}}/save
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "turn": 2,
+  "current_player": "player",
+  "player": {
+    "cities": [],
+    "units": [],
+    "technologies": [],
+    "resources": {}
+  },
+  "ai": {
+    "cities": [],
+    "units": [],
+    "technologies": [],
+    "resources": {}
+  },
+  "map": {
+    "size": { "width": 10, "height": 10 },
+    "explored": [[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0]],
+    "visible_objects": []
+  }
+}
+
+###
+
+### 9. Player action (POST /api/games/{game_id}/action)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "moveUnit",
+  "details": {
+    "unitId": "unit1",
+    "destination": { "x": 3, "y": 4 }
+  }
+}
+
+###
+
+### 9a. Move a unit (moveUnit)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "moveUnit",
+  "details": {
+    "unitId": "unit1",
+    "destination": { "x": 4, "y": 5 }
+  }
+}
+
+###
+
+### 9b. Build a structure (buildStructure)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "buildStructure",
+  "details": {
+    "cityId": "city1",
+    "structureType": "granary"
+  }
+}
+
+###
+
+### 9c. Train a unit (trainUnit)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "trainUnit",
+  "details": {
+    "cityId": "city1",
+    "unitType": "archer",
+    "quantity": 2
+  }
+}
+
+###
+
+### 9d. Improve a resource (improveResource)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "improveResource",
+  "details": {
+    "resourceType": "wheat"
+  }
+}
+
+###
+
+### 9e. Research a technology (researchTechnology)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "researchTechnology",
+  "details": {
+    "technology": "Writing"
+  }
+}
+
+###
+
+### 9f. Found a new city (foundCity)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "foundCity",
+  "details": {
+    "cityId": "city2",
+    "location": { "x": 6, "y": 6 }
+  }
+}
+
+###
+
+### 9g. Attack an enemy (attackEnemy)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "type": "attackEnemy",
+  "details": {
+    "unitId": "unit1",
+    "location": { "x": 5, "y": 5 }
+  }
+}
+
+###
+
+### 9h. Multiple actions in one request (array)
+POST http://localhost:8000/api/games/{{game_id}}/action
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+[
+  {
+    "type": "moveUnit",
+    "details": {
+      "unitId": "unit1",
+      "destination": { "x": 7, "y": 7 }
+    }
+  },
+  {
+    "type": "buildStructure",
+    "details": {
+      "cityId": "city1",
+      "structureType": "library"
+    }
+  },
+  {
+    "type": "trainUnit",
+    "details": {
+      "cityId": "city1",
+      "unitType": "spearman",
+      "quantity": 1
+    }
+  }
+]
+
+###
+
+### 10. End turn (POST /api/games/{game_id}/endTurn)
+POST http://localhost:8000/api/games/{{game_id}}/endTurn
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "endTurn": true
+}
+
+###
+
+### 11. Apply cheat (POST /api/games/{game_id}/cheat)
+POST http://localhost:8000/api/games/{{game_id}}/cheat
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "game_id": "{{game_id}}",
+  "cheat_code": "level_up",
+  "target": {
+    "type": "city",
+    "id": "city1"
+  }
+}
+
+###
+
+### 12. List scenarios (GET /api/scenarios)
+GET http://localhost:8000/api/scenarios
+Authorization: Bearer {{access_token}}
+
+###
+
+### 13. Example scenario document (for DB seeding)
+# Use this as a document to insert into the "scenarios" collection if you want to test scenario listing.
+# {
+#   "_id": "default_scenario",
+#   "name": "Default Scenario",
+#   "description": "A simple starting scenario.",
+#   "difficulty": "easy",
+#   "map_size": { "width": 10, "height": 10 },
+#   "initial_state": {}
+# }
