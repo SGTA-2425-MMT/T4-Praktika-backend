@@ -83,6 +83,10 @@ class CheatResponse(BaseModel):
 
 # ─── Game Management ────────────────────────────────────────────────────────────
 
+class PlayerAction(BaseModel):
+    type: str
+    details: Dict[str, Any]
+
 class GameCreate(BaseModel):
     name: str
     scenario_id: str
