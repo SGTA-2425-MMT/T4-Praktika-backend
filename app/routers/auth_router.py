@@ -35,13 +35,17 @@ async def register(
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=data)
         if resp.status_code != 200:
-            detail = (
-                f"Failed to get admin token: {resp.text} "
-                f"(status {resp.status_code}). "
-            )
+            try:
+                error_json = resp.json()
+            except Exception:
+                error_json = {"error": "admin_token_error", "error_description": resp.text}
             raise HTTPException(
                 status_code=resp.status_code,
-                detail=detail
+                detail={
+                    "error": "admin_token_error",
+                    "error_description": error_json.get("error_description", resp.text),
+                    "status_code": resp.status_code
+                }
             )
         admin_token = resp.json()["access_token"]
 
@@ -63,12 +67,17 @@ async def register(
     async with httpx.AsyncClient() as client:
         resp = await client.post(user_url, json=payload, headers=headers)
         if resp.status_code != 201:
-            detail = (
-                f"Failed to create user: {resp.text} "
-                f"(status {resp.status_code}). "
-            )
+            try:
+                error_json = resp.json()
+            except Exception:
+                error_json = {"error": "user_creation_error", "error_description": resp.text}
             raise HTTPException(
-                status_code=resp.status_code, detail=detail
+                status_code=resp.status_code,
+                detail={
+                    "error": "user_creation_error",
+                    "error_description": error_json.get("error_description", resp.text),
+                    "status_code": resp.status_code
+                }
             )
 
         # Get the user id from the Location header
@@ -120,12 +129,17 @@ async def login(form_data: TokenRequest):
     async with httpx.AsyncClient() as client:
         resp = await client.post(token_url, data=data)
         if resp.status_code != 200:
-            detail = (
-                f"Failed to login: {resp.text} "
-                f"(status {resp.status_code}). "
-            )
+            try:
+                error_json = resp.json()
+            except Exception:
+                error_json = {"error": "login_error", "error_description": resp.text}
             raise HTTPException(
-                status_code=resp.status_code, detail=detail
+                status_code=resp.status_code,
+                detail={
+                    "error": error_json.get("error", "login_error"),
+                    "error_description": error_json.get("error_description", resp.text),
+                    "status_code": resp.status_code
+                }
             )
         return resp.json()
 
