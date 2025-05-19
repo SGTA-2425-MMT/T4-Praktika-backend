@@ -6,4 +6,6 @@ motor
 python-jose[cryptography]
 httpx
 python-dotenv
+passlib[bcrypt]
+requests
 groq

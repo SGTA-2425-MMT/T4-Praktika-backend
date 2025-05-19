@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
 from typing import Dict, List, Any, Union
 from bson import ObjectId
 from datetime import datetime, timezone
-from app.auth import verify_token
+from app.auth import get_current_user
 from app.db import db
 from app.schemas import CheatRequest, GameCreate, GameOut, CheatResponse
 from app.services.cheat_handler import handle_cheat
@@ -14,9 +14,9 @@ import random
 
 router = APIRouter(prefix="/api/games", tags=["Games"])
 
-def _get_user_id(claims: dict) -> str:
-    # Use the Keycloak UUID string directly
-    return claims["sub"]
+def _get_user_id(current_user: dict) -> str:
+    # Usar el ObjectId como string
+    return str(current_user["_id"])
 
 
 def _convert_id(doc):
@@ -26,8 +26,8 @@ def _convert_id(doc):
 
 
 @router.get("", response_model=List[GameOut])
-async def list_games(claims: dict = Depends(verify_token)):
-    user_id = _get_user_id(claims)
+async def list_games(current_user: dict = Depends(get_current_user)):
+    user_id = _get_user_id(current_user)
     cursor = db.games.find({"user_id": user_id})
     games: List[Any] = []
     async for doc in cursor:
@@ -37,9 +37,9 @@ async def list_games(claims: dict = Depends(verify_token)):
 
 @router.post("", response_model=GameOut, status_code=status.HTTP_201_CREATED)
 async def create_game(
-    game: GameCreate, claims: dict = Depends(verify_token)
+    game: GameCreate, current_user: dict = Depends(get_current_user)
 ):
-    user_id = _get_user_id(claims)
+    user_id = _get_user_id(current_user)
     now = datetime.now(timezone.utc)
     obj = game.model_dump()
     obj.update(
@@ -59,7 +59,7 @@ async def create_game(
 @router.get("/{game_id}", response_model=GameOut)
 async def get_game(
     game_id: str = Path(..., description="MongoDB ObjectId of the game"),
-    claims: dict = Depends(verify_token),
+    current_user: dict = Depends(get_current_user),
 ):
     objid = ObjectId(game_id)
     game = await db.games.find_one({"_id": objid})
@@ -72,7 +72,7 @@ async def get_game(
 async def save_game(
     game_state: GameState,
     game_id: str,
-    claims: dict = Depends(verify_token),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Persist a manual save.
@@ -95,10 +95,10 @@ async def save_game(
 async def player_action(
     payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...),
     game_id: str = Path(...),
-    claims: dict = Depends(verify_token),
+    current_user: dict = Depends(get_current_user),
 ):
     # 1) Ownership check
-    user_id = _get_user_id(claims)
+    user_id = _get_user_id(current_user)
     object_id = ObjectId(game_id)
     doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
     if not doc:
@@ -234,10 +234,10 @@ async def player_action(
 async def end_turn(
     payload: Dict[str, Any],
     game_id: str,
-    claims: dict = Depends(verify_token),
+    current_user: dict = Depends(get_current_user),
 ):
     # 1) Ownership check
-    user_id = _get_user_id(claims)
+    user_id = _get_user_id(current_user)
     object_id = ObjectId(game_id)
     doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
     if not doc:
@@ -322,7 +322,7 @@ async def end_turn(
 async def cheat(
     req: CheatRequest,
     game_id: str,
-    claims: dict = Depends(verify_token)
+    current_user: dict = Depends(get_current_user)
 ):
     
     """

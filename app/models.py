@@ -19,8 +19,9 @@ class User(BaseModel):
     username: str
     email: str
     password_hash: str
-    created_at: datetime
-    last_login: Optional[datetime]
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_login: Optional[datetime] = None
+    is_active: bool = True
 
     class Config:
         json_encoders = { ObjectId: str }

@@ -29,25 +29,29 @@ class GameState(BaseModel):
 
 # ─── Auth & Profile ─────────────────────────────────────────────────────────────
 
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
+
 class TokenRequest(BaseModel):
     username: str
     password: str
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
-    expires_in: int
-    token_type: str
+    token_type: str = "bearer"
+    expires_in: int = 86400  # 24 horas en segundos
 
 class ProfileUpdate(BaseModel):
-    username: Optional[str]
-    email: Optional[str]
+    username: Optional[str] = None
+    email: Optional[str] = None
 
 class UserOut(BaseModel):
-    id: str = Field(alias="sub")
-    username: Optional[str]
-    email: Optional[str]
-    created_at: Optional[datetime] = None
+    id: str = Field(alias="_id")
+    username: str
+    email: str
+    created_at: datetime
     last_login: Optional[datetime] = None
 
     class Config:
