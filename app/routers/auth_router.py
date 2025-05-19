@@ -114,8 +114,9 @@ async def login(form_data: TokenRequest):
     """
     Password-grant against Keycloak’s token endpoint.
     """
+    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
     token_url = (
-        f"{settings.KEYCLOAK_BASE_URL}/realms/"
+        f"{base_url}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     )
     data = {
@@ -149,11 +150,10 @@ async def get_profile(claims: dict = Depends(verify_token)):
     """
     Call Keycloak’s userinfo endpoint and return the core fields.
     """
-    base = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-
+    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
 
     url = (
-        f"{base}/realms/"
+        f"{base_url}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/userinfo"
     )
     print(claims)
@@ -183,10 +183,10 @@ async def logout(refresh_token: Annotated[str, Body(..., embed=True)], claims: d
     """
     Call Keycloak’s logout endpoint.
     """
-    base = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
+    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
 
     url = (
-        f"{base}/realms/"
+        f"{base_url}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/logout"
     )
 
@@ -210,9 +210,11 @@ async def update_profile(
     """
     Update Keycloak user via Admin API.
     """
+    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
+
     # 1) get admin token (same as in register)
     token_url = (
-        f"{settings.KEYCLOAK_BASE_URL}/realms/"
+        f"{base_url}/realms/"
         f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
     )
     data = {
@@ -237,7 +239,7 @@ async def update_profile(
             payload['email'] = update.email
 
     user_url = (
-        f"{settings.KEYCLOAK_BASE_URL}/admin/realms/"
+        f"{base_url}/admin/realms/"
         f"{settings.KEYCLOAK_REALM}/users/{user_id}"
     )
 
