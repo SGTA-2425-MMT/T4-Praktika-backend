@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str
 
     class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+        env_file = None
 
 settings = Settings()
