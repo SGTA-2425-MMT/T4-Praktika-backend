@@ -362,6 +362,54 @@ async def cheat(
     return cheat_res
 
 
+@router.delete("/{game_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a game")
+async def delete_game(
+    game_id: str = Path(..., description="MongoDB ObjectId of the game to delete"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Delete a game by its ID.
+    
+    - Verifies that the user is the owner of the game
+    - Removes the game from the database
+    - Returns a 204 No Content on success
+    """
+    # Get user ID
+    user_id = _get_user_id(current_user)
+    
+    try:
+        # Create MongoDB ObjectId from game_id
+        object_id = ObjectId(game_id)
+        
+        # Check if the game exists and belongs to the user
+        existing_game = await db.games.find_one({"_id": object_id, "user_id": user_id})
+        if not existing_game:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Game not found or not owned by current user"
+            )
+        
+        # Delete the game
+        delete_result = await db.games.delete_one({"_id": object_id, "user_id": user_id})
+        
+        if delete_result.deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Game could not be deleted"
+            )
+        
+        # Return 204 No Content (successful deletion)
+        return None
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid game ID or other error: {str(e)}"
+        )
+
+
 def find_random_unexplored_tile(explored):
     height = len(explored)
     width = len(explored[0]) if height > 0 else 0
