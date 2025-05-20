@@ -196,12 +196,25 @@ async def player_action(
             if not loc:
                 error = f"attackEnemy: Missing location."
             else:
-                before = len(gs_new.ai.units)
-                gs_new.ai.units = [
-                    u for u in gs_new.ai.units
-                    if u.get("location") != loc
-                ]
-                if len(gs_new.ai.units) == before:
+                # Asegurarse de que hay al menos un jugador IA
+                if not gs_new.ai or len(gs_new.ai) == 0:
+                    error = f"attackEnemy: No AI players found."
+                    continue
+                    
+                # Buscamos unidades en la posición indicada en todos los jugadores IA
+                units_found = False
+                for ai_idx, ai_player in enumerate(gs_new.ai):
+                    before_count = len(ai_player.units)
+                    ai_player.units = [
+                        u for u in ai_player.units
+                        if u.get("location") != loc
+                    ]
+                    # Si encontramos unidades en esta posición
+                    if len(ai_player.units) < before_count:
+                        units_found = True
+                        gs_new.ai[ai_idx] = ai_player
+                
+                if not units_found:
                     error = f"attackEnemy: No AI unit found at location {loc}."
         else:
             error = f"Unknown action type: {t}"
@@ -256,45 +269,46 @@ async def end_turn(
     # 3) Apply player end turn logic (update state as needed)
     # ...apply any player end turn logic here...
 
-    # 4) Call AI agent to advance AI turn
-    ai_result = ai_agent.get_ai_actions(gs)
-    print(f"AI actions: {ai_result}")
-    ai_actions = []
-    if isinstance(ai_result, dict):
-        ai_actions_seq = ai_result.get("ai_actions_sequence", [])
-        print(f"AI actions sequence: {ai_actions_seq}")
-        # Accept both new and old AI action formats
-        def safe_merge(a):
-            if not a.get("action_type"):
-                return None
-            entity = a.get("entity") or {}
-            path = a.get("path")
-            path_dict = path[0] if path and isinstance(path, list) and len(path) > 0 and isinstance(path[0], dict) else {}
-            details = {**entity, **path_dict} if entity or path_dict else {}
-            return {
-                "type": a.get("action_type"),
-                "details": details
+    # 4) Call AI agent to advance AI turn - with error handling
+    try:
+        ai_result = ai_agent.get_ai_actions(gs)
+        print(f"AI actions: {ai_result}")
+        ai_actions = []
+        if isinstance(ai_result, dict):
+            ai_actions_seq = ai_result.get("ai_actions_sequence", [])
+            print(f"AI actions sequence: {ai_actions_seq}")
+            # Accept both new and old AI action formats
+            def safe_merge(a):
+                if not a.get("action_type"):
+                    return None
+                entity = a.get("entity") or {}
+                path = a.get("path")
+                path_dict = path[0] if path and isinstance(path, list) and len(path) > 0 and isinstance(path[0], dict) else {}
+                details = {**entity, **path_dict} if entity or path_dict else {}
+                return {
+                    "type": a.get("action_type"),
+                    "details": details
+                }
+            ai_actions = [safe_merge(a) for a in ai_actions_seq if a.get("action_type")]
+            ai_actions = [a for a in ai_actions if a is not None]
+            # If still empty, fallback to actions from ai_result if present
+            if not ai_actions and "actions" in ai_result and isinstance(ai_result["actions"], list):
+                ai_actions = ai_result["actions"]
+    except Exception as e:
+        print(f"Error getting AI actions: {e}")
+        # Fallback: Hacer que la IA funde una ciudad en situación de emergencia
+        ai_actions = [{
+            "type": "foundCity",
+            "details": {
+                "cityId": f"ai_city_{len(gs.ai[0].cities if gs.ai and len(gs.ai) > 0 else 0)+1}",
+                "location": {"x": gs.map.size.width // 2, "y": gs.map.size.height // 2}
             }
-        ai_actions = [safe_merge(a) for a in ai_actions_seq if a.get("action_type")]
-        ai_actions = [a for a in ai_actions if a is not None]
-        # If still empty, fallback to actions from ai_result if present
-        if not ai_actions and "actions" in ai_result and isinstance(ai_result["actions"], list):
-            ai_actions = ai_result["actions"]
-
-    print(f"AI actions after processing: {ai_actions}")
-
-    # If ai_actions is still empty, try to get from raw actions in ai_result
-    if not ai_actions and hasattr(ai_result, "get"):
-        actions = ai_result.get("actions", [])
-        if isinstance(actions, list):
-            ai_actions = actions
-
-    print(f"Final AI actions: {ai_actions}")
+        }]
 
     # --- Ensure AI actions are applied and saved even if empty ---
     # Always use the updated state after applying AI actions
     gs = apply_ai_actions(gs, ai_actions)
-
+    
     print(f"Game state after AI actions: {gs}")
 
     # Increment turn and switch current_player
@@ -433,57 +447,66 @@ def apply_ai_actions(gs: GameState, ai_actions: list) -> GameState:
     """
     Mutate the GameState in-place according to the AI actions.
     Only basic logic for demonstration; extend as needed.
+    Now supports multiple AI players.
     """
     gs = deepcopy(gs)
+    
+    # Initialize with first AI player if it exists, otherwise create one
+    if not gs.ai or len(gs.ai) == 0:
+        gs.ai = [GameStatePlayer(cities=[], units=[], technologies=[], resources={})]
+    
+    # For now, we're just processing actions for the first AI player (index 0)
+    ai_player = gs.ai[0]
+    
     for action in ai_actions:
         t = action.get("type")
         details = action.get("details", {})
         if t == "moveUnit":
             unit_id = details.get("unitId")
             dest = details.get("destination")
-            for unit in gs.ai.units:
+            for unit in ai_player.units:
                 if unit.get("id") == unit_id and dest:
                     unit["location"] = dest
         elif t == "buildStructure":
             city_id = details.get("cityId")
             structure = details.get("structureType")
-            for city in gs.ai.cities:
+            for city in ai_player.cities:
                 if city.get("id") == city_id and structure:
                     city.setdefault("buildings", []).append(structure)
         elif t == "trainUnit":
             city_id = details.get("cityId")
             unit_type = details.get("unitType")
             quantity = details.get("quantity", 1)
-            for city in gs.ai.cities:
+            for city in ai_player.cities:
                 if city.get("id") == city_id and unit_type:
                     for _ in range(quantity):
                         new_unit = {
-                            "id": f"ai_unit_{len(gs.ai.units)+1}",
+                            "id": f"ai_unit_{len(ai_player.units)+1}",
                             "type": unit_type,
                             "location": city.get("location"),
                             "owner": "ai",
                             "movement_points": 2
                         }
-                        gs.ai.units.append(new_unit)
+                        ai_player.units.append(new_unit)
         elif t == "improveResource":
             res_type = details.get("resourceType")
-            for res_name, res in gs.ai.resources.items():
+            for res_name, res in ai_player.resources.items():
                 if res_name == res_type:
                     res["improved"] = True
         elif t == "researchTechnology":
             tech_name = details.get("technology")
             if tech_name:
-                gs.ai.technologies.append({"name": tech_name, "turns_remaining": 0})
+                ai_player.technologies.append({"name": tech_name, "turns_remaining": 0})
         elif t == "foundCity":
             # --- AI city random placement ---
-            city_id = details.get("cityId", f"ai_city_{len(gs.ai.cities)+1}")
+            city_id = details.get("cityId", f"ai_city_{len(ai_player.cities)+1}")
             location = details.get("location")
             if not location:
                 # Place at random unexplored tile
                 x, y = find_random_unexplored_tile(gs.map.explored)
                 location = {"x": x, "y": y}
             if not city_id:
-                city_id = f"ai_city_{len(gs.ai.cities)+1}"
+                city_id = f"ai_city_{len(ai_player.cities)+1}"
             new_city = {
                 "id": city_id,
                 "name": city_id,
@@ -492,7 +515,7 @@ def apply_ai_actions(gs: GameState, ai_actions: list) -> GameState:
                 "population": 1,
                 "owner": "ai"
             }
-            gs.ai.cities.append(new_city)
+            ai_player.cities.append(new_city)
         elif t == "attackEnemy":
             loc = details.get("location")
             if loc:
@@ -501,6 +524,9 @@ def apply_ai_actions(gs: GameState, ai_actions: list) -> GameState:
                     if u.get("location") != loc
                 ]
         # ...add more action types as needed...
+    
+    # Update the AI player in the list
+    gs.ai[0] = ai_player
     return gs
 
 def apply_player_actions(gs: GameState, player_actions: list) -> GameState:
@@ -585,11 +611,13 @@ def apply_player_actions(gs: GameState, player_actions: list) -> GameState:
                         set_explored_radius(gs.map.explored, (location["x"], location["y"]), radius=2)
         elif t == "attackEnemy":
             loc = details.get("location")
-            if loc:
-                # Remove AI unit at location if exists
-                gs.ai.units = [
-                    u for u in gs.ai.units
-                    if u.get("location") != loc
-                ]
+            if loc and gs.ai and len(gs.ai) > 0:
+                # Iterar sobre todos los jugadores IA y eliminar unidades en esa ubicación
+                for ai_idx, ai_player in enumerate(gs.ai):
+                    ai_player.units = [
+                        u for u in ai_player.units
+                        if u.get("location") != loc
+                    ]
+                    gs.ai[ai_idx] = ai_player
         # ...add more action types as needed...
     return gs

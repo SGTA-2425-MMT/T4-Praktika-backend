@@ -12,6 +12,7 @@ class GameMap(BaseModel):
     size: MapSize
     explored: List[List[int]]
     visible_objects: List[Dict[str, Any]]
+    stored_tiles: Optional[List[List[Any]]] = None
 
 class GameStatePlayer(BaseModel):
     cities: List[Dict[str, Any]]
@@ -23,7 +24,7 @@ class GameState(BaseModel):
     turn: int
     current_player: str
     player: GameStatePlayer
-    ai: GameStatePlayer
+    ai: List[GameStatePlayer]  # Lista de jugadores IA
     map: GameMap
 
 

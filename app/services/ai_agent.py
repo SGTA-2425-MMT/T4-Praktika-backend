@@ -1,157 +1,126 @@
 from typing import Any, Dict, List
 from app.config import settings
-from app.models import GameState
+from app.models import GameState, GameStatePlayer
 from groq import Groq
 import json
 import re
+import logging
 
 client = Groq(api_key=settings.GROQ_API_KEY)
+logging.basicConfig(level=logging.INFO)
 
+def simplify_game_state(gs: GameState) -> Dict[str, Any]:
+    """
+    Crea una versión simplificada del estado de juego para reducir los tokens enviados a la API.
+    """
+    # Para el primer jugador de la IA (o creamos uno vacío si no existe)
+    ai_player = gs.ai[0] if gs.ai and len(gs.ai) > 0 else GameStatePlayer(
+        cities=[], units=[], technologies=[], resources={}
+    )
+    
+    # Simplificar y eliminar datos innecesarios
+    return {
+        "turn": gs.turn,
+        "current_player": gs.current_player,
+        "map": {
+            "size": {
+                "width": gs.map.size.width,
+                "height": gs.map.size.height
+            },
+            # Mapa de exploración simplificado - sólo cuántas casillas exploradas
+            "explored_count": sum(sum(row) for row in gs.map.explored) if gs.map.explored else 0,
+        },
+        "player": {
+            "cities": [
+                {
+                    "id": city.get("id"),
+                    "location": city.get("location"),
+                    "buildings": city.get("buildings", [])[:3]  # Limitamos a los 3 primeros edificios
+                } for city in gs.player.cities[:5]  # Limitamos a 5 ciudades
+            ],
+            "units": [
+                {
+                    "id": unit.get("id"),
+                    "type": unit.get("type"),
+                    "location": unit.get("location")
+                } for unit in gs.player.units[:10]  # Limitamos a 10 unidades
+            ],
+            "tech_count": len(gs.player.technologies),
+            "resources": list(gs.player.resources.keys())  # Solo los nombres de los recursos
+        },
+        "ai": {
+            "cities": [
+                {
+                    "id": city.get("id"),
+                    "location": city.get("location"),
+                    "buildings": city.get("buildings", [])
+                } for city in ai_player.cities
+            ],
+            "units": [
+                {
+                    "id": unit.get("id"),
+                    "type": unit.get("type"),
+                    "location": unit.get("location")
+                } for unit in ai_player.units
+            ],
+            "tech_count": len(ai_player.technologies),
+            "resources": list(ai_player.resources.keys())
+        }
+    }
 
 def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
-    completion = client.chat.completions.create(
-        messages=[
-            {
-                "role": "system",
-                "content":
-                    "You're an AI agent playing a turn-based strategy game in the style of Civilization. "
-                    "You can only control assets (units, cities, resources, etc.) where the 'owner' field is set to 'ai'. "
-                    "If you have no units or cities with owner 'ai', your first action this turn MUST be to create one (using foundCity or trainUnit), otherwise you will lose the game. "
-                    "If you have only a city and no units, your next priority is to train a unit. "
-                    "If you have only a unit and no city, your next priority is to found a city. "
-                    "If you have both, you must always take at least one meaningful action (move, build, train, improve, research, attack, etc.) before endTurn. "
-                    "Never skip your turn unless you have no possible actions. "
-                    "If you have a city but no units, you MUST always issue a trainUnit action before endTurn. "
-                    "If you have a unit but no city, you MUST always issue a foundCity action before endTurn. "
-                    "If you have both, you MUST always issue at least one of: moveUnit, buildStructure, trainUnit, improveResource, researchTechnology, attackEnemy before endTurn. "
-                    "If you have only a city and no units, and you have already issued a trainUnit action, you may end your turn. "
-                    "If you have only a unit and no city, and you have already issued a foundCity action, you may end your turn. "
-                    "If you have both, you must always issue at least one meaningful action before endTurn, and you may repeat actions if possible. "
-                    "If you have a city and no units, always try to train a unit (e.g., trainUnit with quantity 1 and a valid unitType). "
-                    "If you have a city and units, always try to move a unit, build a structure, train a unit, improve a resource, research a technology, or attack an enemy before ending your turn. "
-                    "Your goal is to expand your empire, conquer cities, gather resources, and defeat your opponent. "
-                    "You will receive the game state and decide your actions for this turn.\n"
-                    "Your actions must always follow one of these schemas:\n"
-                    "- moveUnit: {\"type\": \"moveUnit\", \"details\": {\"unitId\": <string>, \"destination\": {\"x\": <int>, \"y\": <int>}}}\n"
-                    "- buildStructure: {\"type\": \"buildStructure\", \"details\": {\"cityId\": <string>, \"structureType\": <string>}}\n"
-                    "- trainUnit: {\"type\": \"trainUnit\", \"details\": {\"cityId\": <string>, \"unitType\": <string>, \"quantity\": <int>}}\n"
-                    "- improveResource: {\"type\": \"improveResource\", \"details\": {\"resourceType\": <string>}}\n"
-                    "- researchTechnology: {\"type\": \"researchTechnology\", \"details\": {\"technology\": <string>}}\n"
-                    "- foundCity: {\"type\": \"foundCity\", \"details\": {\"cityId\": <string>, \"location\": {\"x\": <int>, \"y\": <int>}}}\n"
-                    "- attackEnemy: {\"type\": \"attackEnemy\", \"details\": {\"unitId\": <string>, \"location\": {\"x\": <int>, \"y\": <int>}}}\n"
-                    "- endTurn: {\"type\": \"endTurn\", \"details\": {}}\n"
-                    "If you want to perform multiple actions in one turn, return them as a list in the 'actions' array, each following one of the above schemas.\n"
-                    "If you do not follow these schemas, your actions will be ignored.\n"
-                    "Your goal is to expand your empire, conquer cities, gather resources, and defeat your opponent. "
-                    "You will receive the game state and decide your actions for this turn.\n"
-                    "Your task is to analyze the game state, formulate a strategy, and specify your actions for the current turn.\nFollow these steps:\n"
-                    "1. Analyze the game state, considering the following:\n"
-                    "   - The location, condition, and buildings of your cities\n"
-                    "   - The position and abilities of your units\n"
-                    "   - The available resources and income\n"
-                    "   - The explored areas of the map\n"
-                    "   - The known locations and strengths of your enemies\n"
-                    "   - Nearby opportunities (resources, barbarian camps, technologies, etc.)\n"
-                    "   - Fog of war (unexplored areas of the map)\n"
-                    "2. Formulate a strategy based on the following priorities:\n"
-                    "   - Exploration to find resources and cities\n"
-                    "   - Securing income sources\n"
-                    "   - City development to recruit stronger units\n"
-                    "   - Technological advancements to gain advantages\n"
-                    "   - Balancing economy and military power\n"
-                    "3. Create a set of actions for this turn. You can perform multiple actions until you run out of movement points. Possible action types are:\n"
-                    "   - moveUnit: Move a unit to a new location.\n"
-                    "   - buildStructure: Build a structure in a city.\n"
-                    "   - trainUnit: Train a new unit in a city.\n"
-                    "   - improveResource: Improve a resource tile.\n"
-                    "   - attackEnemy: Start a battle with an enemy unit.\n"
-                    "   - researchTechnology: Research a new technology.\n"
-                    "   - foundCity: Found a new city.\n"
-                    "Before providing your final response, write down your thought process and strategic considerations between the <strategic_planning> tags. In this section:\n"
-                    "1. Summarize the current game state, including the cities' locations, resources, and known information about the enemy.\n"
-                    "2. List potential opportunities and threats.\n"
-                    "3. Prioritize goals based on the current situation.\n"
-                    "4. Explain your short-term (this turn) and long-term (next turns) strategy.\n"
-                    "This section can be quite detailed, as a deep strategy is essential for success in the game.\n"
-                    "Your final response should be in the following JSON format:\n"
-                    "```json\n"
-                    "{\n"
-                    "  \"actions\": [\n"
-                    "    {\n"
-                    "      \"type\": \"moveUnit\",\n"
-                    "      \"details\": {\n"
-                    "        // Details for the action"
-                    "      }\n"
-                    "    },\n"
-                    "      // More actions can be added here"
-                    "    {\n"
-                    "      \"type\": \"endTurn\",\n"
-                    "    }\n"
-                    "  ],\n"
-                    "  \"reasoning\": \"A detailed explanation of your strategy and plans for the next turns\",\n"
-                    "  \"analysis\": \"A brief analysis of the game state and the opponent's position\"\n"
-                    "}\n"
-                    "Here is an example of the actions format:\n"
-                    "```json\n"
-                    "{\n"
-                    "  \"actions\": [\n"
-                    "    {\n"
-                    "      \"type\": \"moveUnit\",\n"
-                    "      \"details\": {\n"
-                    "        \"unitId\": \"unit1\",\n"
-                    "        \"destination\": {\"x\": 5, \"y\": 3},\n"
-                    "      }\n"
-                    "    },\n"
-                    "    {\n"
-                    "      \"type\": \"buildStructure\",\n"
-                    "      \"details\": {\n"
-                    "        \"cityId\": \"city1\",\n"
-                    "        \"structureType\": \"granary\"\n"
-                    "      }\n"
-                    "    },\n"
-                    "    {\n"
-                    "      \"type\": \"trainUnit\"\n"
-                    "      \"details\": {\n"
-                    "        \"cityId\": \"city1\",\n"
-                    "        \"unitType\": \"warrior\"\n"
-                    "        \"quantity\": 1\n"
-                    "      }\n"
-                    "    },\n"
-                    "    {\n"
-                    "      \"type\": \"endTurn\"\n"
-                    "    }\n"
-                    "  ],\n"
-                    "  \"reasoning\": \"I will move my unit to explore the nearby area and build a granary in my city to increase food production. I will also train a warrior for defense.\",\n"
-                    "  \"analysis\": \"The enemy is located to the north, and I need to secure my borders while expanding my territory.\"\n"
-                    "}\n"
-                    "Keep in mind:\n"
-                    "- You can only control assets (units, cities, resources, etc.) where the 'owner' field is set to 'ai'.\n"
-                    "- If you have no units or cities with owner 'ai', your first priority is to create them (e.g., by founding a city or training a unit).\n"
-                    "- Think strategically and plan for the long term.\n"
-                    "- Manage your resources efficiently.\n"
-                    "- Adapt your strategy to the game state, including unexplored areas due to fog of war.\n"
-                    "- Balance economic development and military strength.\n"
-                    "- Exploit your strengths and your opponent's weaknesses.\n"
-                    "- Always end your turn with an 'endTurn' action.\n"
-                    "- Provide a clear explanation of your decisions.\n"
-                    "- Stay within the rules and mechanics of the game.\n"
-                    "Now, based on the provided game state, analyze the situation, formulate your strategy, and create your actions, reasoning, and analysis for this turn."
-            },
-            {
-                "role": "user",
-                "content": f"<game_state>\n{gs.model_dump_json()}\n</game_state>"
-            }
-        ],
-        model="gemma2-9b-it"
-    )
+    # Ensure we have at least one AI player
+    if not gs.ai or len(gs.ai) == 0:
+        # Create a placeholder AI player if none exists
+        gs.ai = [GameStatePlayer(cities=[], units=[], technologies=[], resources={})]
+    
+    # For now, we'll just use the first AI player
+    ai_player = gs.ai[0]
+    
+    # Crear una versión simplificada del estado del juego para reducir tokens
+    simplified_state = simplify_game_state(gs)
+    
+    try:
+        completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content":
+                        "You're an AI agent playing a turn-based strategy game in the style of Civilization. "
+                        "You can only control assets (units, cities, resources, etc.) where the 'owner' field is set to 'ai'. "
+                        "If you have no units or cities with owner 'ai', your first action this turn MUST be to create one (using foundCity or trainUnit). "
+                        "If you have only a city and no units, train a unit. "
+                        "If you have only a unit and no city, found a city. "
+                        "Always take at least one meaningful action before endTurn. "
+                        "Available actions:"
+                        "- moveUnit: {\"type\": \"moveUnit\", \"details\": {\"unitId\": <string>, \"destination\": {\"x\": <int>, \"y\": <int>}}}"
+                        "- buildStructure: {\"type\": \"buildStructure\", \"details\": {\"cityId\": <string>, \"structureType\": <string>}}"
+                        "- trainUnit: {\"type\": \"trainUnit\", \"details\": {\"cityId\": <string>, \"unitType\": <string>, \"quantity\": <int>}}"
+                        "- improveResource: {\"type\": \"improveResource\", \"details\": {\"resourceType\": <string>}}"
+                        "- researchTechnology: {\"type\": \"researchTechnology\", \"details\": {\"technology\": <string>}}"
+                        "- foundCity: {\"type\": \"foundCity\", \"details\": {\"cityId\": <string>, \"location\": {\"x\": <int>, \"y\": <int>}}}"
+                        "- attackEnemy: {\"type\": \"attackEnemy\", \"details\": {\"unitId\": <string>, \"location\": {\"x\": <int>, \"y\": <int>}}}"
+                        "- endTurn: {\"type\": \"endTurn\"}"
+                        "Return only a JSON with your actions: {\"actions\": [...]}"
+                },
+                {
+                    "role": "user",
+                    "content": f"Game state: {json.dumps(simplified_state)}"
+                }
+            ],
+            model="gemma2-9b-it",
+            max_tokens=1000  # Limitar la respuesta para evitar errores
+        )
+        
+        # Extract the JSON block from the response
+        response = completion.choices[0].message.content
+        
+    except Exception as e:
+        logging.error(f"Error al llamar a la API de Groq: {e}")
+        # Fallback en caso de error - crear acciones predeterminadas
+        return create_fallback_actions(gs, ai_player)
 
-    # Extract the JSON block from the response
-    response = completion.choices[0].message.content
-
-    # Try to extract the first JSON code block
-    import logging
-    logging.basicConfig(level=logging.ERROR)
-
+    # Procesar la respuesta
     try:
         json_match = re.search(r"```json\s*({[^}]*})\s*```", response, re.DOTALL)
         if json_match:
@@ -160,37 +129,17 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
             # Fallback: try to find the first {...} block
             json_match = re.search(r"({.*})", response, re.DOTALL)
             json_str = json_match.group(1) if json_match else "{}"
-    except Exception as e:
-        logging.error(f"Error extracting JSON from response: {e}")
-        json_str = "{}"
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        # Fallback: try to find the first {...} block
-        json_match = re.search(r"({.*})", response, re.DOTALL)
-        json_str = json_match.group(1) if json_match else "{}"
-
-    try:
+        
         ai_json = json.loads(json_str)
-    except Exception:
-        ai_json = {}
+    except Exception as e:
+        logging.error(f"Error al analizar la respuesta de la IA: {e}")
+        return create_fallback_actions(gs, ai_player)
 
     actions = ai_json.get("actions", [])
-    # Fallback: if AI has no assets and no actions, inject a foundCity action
-    has_ai_assets = (gs.ai.cities and len(gs.ai.cities) > 0) or (gs.ai.units and len(gs.ai.units) > 0)
-    if not has_ai_assets and not actions:
-        actions = [{
-            "type": "foundCity",
-            "details": {
-                "cityId": "ai_city_1",
-                "location": {"x": 0, "y": 0}
-            }
-        }, {
-            "type": "endTurn"
-        }]
-    reasoning = ai_json.get("reasoning", "")
-    analysis = ai_json.get("analysis", "")
+    if not actions:
+        return create_fallback_actions(gs, ai_player)
 
+    # --- Resto del procesamiento igual que antes ---
     # --- Analyze actions for summary ---
     total_actions = len(actions)
     main_focus = "expansion"
@@ -246,7 +195,7 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
         if t == "moveUnit":
             # Only allow AI to move its own units
             unit_id = details.get("unitId")
-            ai_unit_ids = {u.get("id") for u in gs.ai.units}
+            ai_unit_ids = {u.get("id") for u in ai_player.units}
             if unit_id not in ai_unit_ids:
                 continue  # Skip actions targeting non-AI units
             entity = {
@@ -260,7 +209,7 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
             movement_points = {"initial": 2, "remaining": 0}
         elif t == "buildStructure":
             city_id = details.get("cityId")
-            ai_city_ids = {c.get("id") for c in gs.ai.cities}
+            ai_city_ids = {c.get("id") for c in ai_player.cities}
             if city_id not in ai_city_ids:
                 continue
             entity = {
@@ -270,7 +219,7 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
             }
         elif t == "trainUnit":
             city_id = details.get("cityId")
-            ai_city_ids = {c.get("id") for c in gs.ai.cities}
+            ai_city_ids = {c.get("id") for c in ai_player.cities}
             if city_id not in ai_city_ids:
                 continue
             entity = {
@@ -317,8 +266,8 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
                 "combat_results": combat_results
             },
             "ai_actions_sequence": ai_actions_sequence,
-            "reasoning": reasoning,
-            "analysis": analysis
+            "reasoning": ai_json.get("reasoning", ""),
+            "analysis": ai_json.get("analysis", "")
         }
     else:
         result = {
@@ -334,6 +283,77 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
 
     return result
 
+def create_fallback_actions(gs: GameState, ai_player: GameStatePlayer) -> Dict[str, Any]:
+    """
+    Crear acciones de respaldo en caso de error en la API o procesamiento.
+    """
+    # Determinar acciones básicas según el estado actual de la IA
+    actions = []
+    
+    # Si no hay ciudades, fundar una
+    if not ai_player.cities:
+        # Buscar una posición para la nueva ciudad
+        map_width = gs.map.size.width
+        map_height = gs.map.size.height
+        center_x, center_y = map_width // 2, map_height // 2
+        
+        actions.append({
+            "type": "foundCity",
+            "details": {
+                "cityId": "ai_city_1",
+                "location": {"x": center_x, "y": center_y}
+            }
+        })
+    # Si hay ciudades pero no unidades, entrenar una unidad
+    elif not ai_player.units and ai_player.cities:
+        actions.append({
+            "type": "trainUnit",
+            "details": {
+                "cityId": ai_player.cities[0].get("id", "ai_city_1"),
+                "unitType": "warrior",
+                "quantity": 1
+            }
+        })
+    # Si hay unidades, mover una al azar
+    elif ai_player.units:
+        unit = ai_player.units[0]
+        loc = unit.get("location", {"x": 0, "y": 0})
+        new_x = (loc.get("x", 0) + 1) % gs.map.size.width
+        new_y = (loc.get("y", 0) + 1) % gs.map.size.height
+        
+        actions.append({
+            "type": "moveUnit",
+            "details": {
+                "unitId": unit.get("id", "ai_unit_1"),
+                "destination": {"x": new_x, "y": new_y}
+            }
+        })
+    
+    # Siempre terminar turno
+    actions.append({"type": "endTurn", "details": {}})
+    
+    # Generar resultado básico
+    return {
+        "ai_turn_summary": {
+            "total_actions": len(actions),
+            "main_focus": "fallback",
+            "resources_gained": {"food": 0, "production": 0, "science": 0},
+            "territories_explored": 0,
+            "combat_results": []
+        },
+        "ai_actions_sequence": [
+            {
+                "id": idx+1,
+                "action_type": action["type"],
+                "entity": None,
+                "path": None,
+                "movement_points": None,
+                "state_snapshot_before": {},
+                "state_snapshot_after": {}
+            }
+            for idx, action in enumerate(actions)
+        ]
+    }
 
 if __name__ == "__main__":
     from app.models import GameState, GameStatePlayer, MapSize, GameMap
@@ -367,12 +387,12 @@ if __name__ == "__main__":
             "iron": { "location": {"x": 4, "y": 4}, "improved": True }
         }
     )
-    ai = GameStatePlayer(
+    ai = [GameStatePlayer(
         cities=[],
         units=[],
         technologies=[],
         resources={}
-    )
+    )]
 
     world_map = GameMap(
         size=MapSize(width=10, height=10),
