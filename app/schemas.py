@@ -12,19 +12,9 @@ class GameMap(BaseModel):
     size: MapSize
     explored: List[List[int]]
     visible_objects: List[Dict[str, Any]]
+    stored_tiles: List[List[Any]]
 
-class GameStatePlayer(BaseModel):
-    cities: List[Dict[str, Any]]
-    units: List[Dict[str, Any]]
-    technologies: List[Dict[str, Any]]
-    resources: Dict[str, Any]
 
-class GameState(BaseModel):
-    turn: int
-    current_player: str
-    player: GameStatePlayer
-    ai: GameStatePlayer
-    map: GameMap
 
 
 # ─── Auth & Profile ─────────────────────────────────────────────────────────────
@@ -79,7 +69,7 @@ class CheatResponse(BaseModel):
     success: bool
     message: str
     affected_entity: AffectedEntity
-    game_state: GameState
+    gamesession: str
 
     class Config:
         from_attributes = True
@@ -94,7 +84,7 @@ class PlayerAction(BaseModel):
 class GameCreate(BaseModel):
     name: str
     scenario_id: str
-    game_state: GameState
+    gamesession: str
 
 class GameOut(BaseModel):
     id: str = Field(alias="_id")
@@ -105,7 +95,7 @@ class GameOut(BaseModel):
     last_saved: datetime
     is_autosave: bool
     cheats_used: List[str]
-    game_state: GameState
+    gamesession: str
 
     class Config:
         validate_by_name = True

@@ -60,7 +60,7 @@ class Game(BaseModel):
     last_saved: datetime
     is_autosave: bool
     cheats_used: List[str]
-    game_state: GameState
+    gamesession: str
 
     class Config:
         json_encoders = { ObjectId: str }

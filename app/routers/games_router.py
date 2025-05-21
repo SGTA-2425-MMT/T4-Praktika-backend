@@ -68,20 +68,22 @@ async def get_game(
     return _convert_id(game)
 
 
+from pydantic import BaseModel
+
+class GameSessionUpdate(BaseModel):
+    gamesession: str
+
 @router.post("/{game_id}/save", response_model=GameOut)
 async def save_game(
-    game_state: GameState,
+    body: GameSessionUpdate,
     game_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Persist a manual save.
-    """
     objid = ObjectId(game_id)
     now = datetime.now(timezone.utc)
     update = {
         "$set": {
-            "game_state": game_state.model_dump(),
+            "gamesession": body.gamesession,
             "last_saved": now,
             "is_autosave": False,
         }
@@ -106,7 +108,7 @@ async def player_action(
     
     # 2) Deserialize game state
     game = Game(**doc)
-    gs: GameState = game.game_state
+    #gs: GameState = game.game_state
 
     # 3) Apply action(s) to game state
     # Accept both a single action or a list of actions
@@ -219,7 +221,7 @@ async def player_action(
         {"_id": object_id},
         {
             "$set": {
-                "game_state": gs_new.model_dump(),
+                "gamesession": gs_new.model_dump(),
                 "last_saved": datetime.now(timezone.utc)
             }
         }
@@ -245,7 +247,7 @@ async def end_turn(
     
     # 2) Deserialize game state
     game = Game(**doc)
-    gs: GameState = game.game_state
+    #gs: GameState = game.game_state
 
     # --- Update explored area around all player cities before AI turn ---
     for city in gs.player.cities:
@@ -306,7 +308,7 @@ async def end_turn(
         {"_id": object_id},
         {
             "$set": {
-                "game_state": gs.model_dump(),
+                "gamesession": gs.model_dump(),
                 "last_saved": datetime.now(timezone.utc),
                 "is_autosave": False,
             }
@@ -350,7 +352,7 @@ async def cheat(
         {"_id": object_id},
         {
             "$set": {
-                "game_state": cheat_res.game_state.dict(),
+                "gamesession": cheat_res.gamesession,
                 "last_saved": datetime.now(timezone.utc),
                 "is_autosave": False,
                 "cheats_used": game.cheats_used + [req.cheat_code],
