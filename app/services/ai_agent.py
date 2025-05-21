@@ -207,17 +207,7 @@ def get_ai_actions(gs: GameState, debug: bool = False) -> Dict[str, Any]:
             if dest:
                 path = [dest]
             movement_points = {"initial": 2, "remaining": 0}
-        elif t == "buildStructure":
-            city_id = details.get("cityId")
-            ai_city_ids = {c.get("id") for c in ai_player.cities}
-            if city_id not in ai_city_ids:
-                continue
-            entity = {
-                "id": city_id,
-                "name": "Unknown",
-                "type": "city"
-            }
-        elif t == "trainUnit":
+        elif t in ("buildStructure", "trainUnit"):
             city_id = details.get("cityId")
             ai_city_ids = {c.get("id") for c in ai_player.cities}
             if city_id not in ai_city_ids:

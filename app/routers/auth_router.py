@@ -1,10 +1,9 @@
-# filepath: /Users/telmogoiko/vs-projects/SGTA/T4-Praktika-backend/app/routers/auth_router.py
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from typing import Dict, Any
+from typing import Dict
 from app.config import settings
-from app.schemas import TokenRequest, TokenResponse, ProfileUpdate, UserOut, UserCreate
+from app.schemas import TokenResponse, ProfileUpdate, UserOut, UserCreate
 from app.auth import (
     get_current_user, 
     authenticate_user, 
@@ -12,7 +11,6 @@ from app.auth import (
     get_password_hash
 )
 from app.db import db
-from bson import ObjectId
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -58,7 +56,7 @@ async def register(
         "username": user.username,
         "email": user.email,
         "password_hash": hashed_password,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(tz=datetime.timezone.utc),
         "last_login": None,
         "is_active": True
     }
