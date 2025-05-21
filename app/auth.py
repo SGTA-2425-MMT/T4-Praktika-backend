@@ -1,5 +1,5 @@
 # filepath: /Users/telmogoiko/vs-projects/SGTA/T4-Praktika-backend/app/auth.py
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -25,9 +25,9 @@ def get_password_hash(password):
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=60 * 24)  # 24 horas por defecto
+        expire = datetime.now(timezone.utc) + timedelta(minutes=60 * 24)  # 24 horas por defecto
     
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -70,7 +70,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     # Actualizar last_login
     await db.users.update_one(
         {"_id": ObjectId(user_id)},
-        {"$set": {"last_login": datetime.utcnow()}}
+        {"$set": {"last_login": datetime.now(timezone.utc)}}
     )
     
     return user
