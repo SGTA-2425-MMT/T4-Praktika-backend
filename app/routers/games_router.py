@@ -7,7 +7,7 @@ from app.db import db
 from app.schemas import CheatRequest, GameCreate, GameOut, CheatResponse
 from app.services.cheat_handler import handle_cheat
 from app.services import ai_agent
-from app.models import Game, GameState
+from app.models import Game, GameState, GameStatePlayer
 from copy import deepcopy
 from fastapi.responses import JSONResponse
 import random
@@ -123,7 +123,7 @@ async def player_action(
             unit_id = details.get("unitId")
             dest = details.get("destination")
             if not unit_id or not dest:
-                error = f"moveUnit: Missing unitId or destination."
+                error = "moveUnit: Missing unitId or destination."
             elif not any(unit.get("id") == unit_id for unit in gs_new.player.units):
                 error = f"moveUnit: Unit '{unit_id}' not found."
             else:
@@ -134,7 +134,7 @@ async def player_action(
             city_id = details.get("cityId")
             structure = details.get("structureType")
             if not city_id or not structure:
-                error = f"buildStructure: Missing cityId or structureType."
+                error = "buildStructure: Missing cityId or structureType."
             elif not any(city.get("id") == city_id for city in gs_new.player.cities):
                 error = f"buildStructure: City '{city_id}' not found."
             else:
@@ -147,7 +147,7 @@ async def player_action(
             quantity = details.get("quantity", 1)
             city = next((c for c in gs_new.player.cities if c.get("id") == city_id), None)
             if not city_id or not unit_type:
-                error = f"trainUnit: Missing cityId or unitType."
+                error = "trainUnit: Missing cityId or unitType."
             elif not city:
                 error = f"trainUnit: City '{city_id}' not found."
             else:
@@ -163,7 +163,7 @@ async def player_action(
         elif t == "improveResource":
             res_type = details.get("resourceType")
             if not res_type:
-                error = f"improveResource: Missing resourceType."
+                error = "improveResource: Missing resourceType."
             elif res_type not in gs_new.player.resources:
                 error = f"improveResource: Resource '{res_type}' not found."
             else:
@@ -171,7 +171,7 @@ async def player_action(
         elif t == "researchTechnology":
             tech_name = details.get("technology")
             if not tech_name:
-                error = f"researchTechnology: Missing technology."
+                error = "researchTechnology: Missing technology."
             elif any(t.get("name") == tech_name for t in gs_new.player.technologies):
                 error = f"researchTechnology: Technology '{tech_name}' already researched."
             else:
@@ -180,7 +180,7 @@ async def player_action(
             city_id = details.get("cityId", f"player_city_{len(gs_new.player.cities)+1}")
             location = details.get("location")
             if not location:
-                error = f"foundCity: Missing location."
+                error = "foundCity: Missing location."
             elif any(c.get("id") == city_id for c in gs_new.player.cities):
                 error = f"foundCity: City '{city_id}' already exists."
             else:
@@ -196,11 +196,11 @@ async def player_action(
         elif t == "attackEnemy":
             loc = details.get("location")
             if not loc:
-                error = f"attackEnemy: Missing location."
+                error = "attackEnemy: Missing location."
             else:
                 # Asegurarse de que hay al menos un jugador IA
                 if not gs_new.ai or len(gs_new.ai) == 0:
-                    error = f"attackEnemy: No AI players found."
+                    error = "attackEnemy: No AI players found."
                     continue
                     
                 # Buscamos unidades en la posición indicada en todos los jugadores IA
@@ -552,6 +552,8 @@ def apply_player_actions(gs: GameState, player_actions: list) -> GameState:
                         found = True
                         break
                 # Optionally: log or handle if not found
+                if not found:
+                    print(f"Unit {unit_id} not found.")
         elif t == "buildStructure":
             city_id = details.get("cityId")
             structure = details.get("structureType")
