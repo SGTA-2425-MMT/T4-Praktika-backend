@@ -553,7 +553,7 @@ def apply_player_actions(gs: GameState, player_actions: list) -> GameState:
                         break
                 # Optionally: log or handle if not found
                 if not found:
-                    print(f"Unit {unit_id} not found.")
+                    logging.warning(f"Unit {unit_id} not found.")
         elif t == "buildStructure":
             city_id = details.get("cityId")
             structure = details.get("structureType")
