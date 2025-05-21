@@ -48,7 +48,7 @@ class GameState(BaseModel):
     turn: int
     current_player: str
     player: GameStatePlayer
-    ai: GameStatePlayer
+    ai: List[GameStatePlayer]
     map: GameMap
 
 class Game(BaseModel):
