@@ -345,62 +345,558 @@ def create_fallback_actions(gs: GameState, ai_player: GameStatePlayer) -> Dict[s
         ]
     }
 
-if __name__ == "__main__":
-    from app.models import GameState, GameStatePlayer, MapSize, GameMap
+def get_ai_unit_updates(gs: GameState, ai_actions: list) -> dict:
+    """
+    Dado el estado del juego y las acciones de la IA,
+    devuelve los cambios de posición y salud de las unidades de la IA en el formato requerido.
+    Si una unidad muere, pone newHealth: 0.
+    """
+    # Copia profunda para no modificar el estado original
+    from copy import deepcopy
+    gs_copy = deepcopy(gs)
+    ai_player = gs_copy.ai[0] if gs_copy.ai and len(gs_copy.ai) > 0 else None
+    if not ai_player:
+        return {"unitUpdates": []}
 
-    you = GameStatePlayer(
-        cities=[
-            {
-                "id": "city1",
-                "name": "Alpha",
-                "location": {"x": 2, "y": 3},
-                "buildings": ["granary"],
-                "population": 5,
-                "owner": "player1"
-            }
-        ],
-        units=[
-            {
-                "id": "unit1",
-                "type": "warrior",
-                "location": {"x": 2, "y": 4},
-                "owner": "player1",
-                "movement_points": 2
-            }
-        ],
-        technologies=[
-            { "name": "Pottery", "turns_remaining": 3 },
-            { "name": "Mining", "turns_remaining": 5 }
-        ],
-        resources={
-            "wheat": { "location": {"x": 3, "y": 3}, "improved": False },
-            "iron": { "location": {"x": 4, "y": 4}, "improved": True }
+    # Crear un dict para acceso rápido a las unidades por id
+    units_by_id = {u["id"]: u for u in ai_player.units}
+    # Guardar salud inicial
+    initial_health = {u["id"]: u.get("health", 100) for u in ai_player.units}
+    # Guardar posición inicial
+    initial_pos = {u["id"]: dict(u.get("location", {})) for u in ai_player.units}
+    # Unidades muertas
+    dead_units = set()
+
+    # Procesar acciones
+    for action in ai_actions:
+        t = action.get("type")
+        details = action.get("details", {})
+        if t == "moveUnit":
+            unit_id = details.get("unitId")
+            dest = details.get("destination")
+            if unit_id in units_by_id and dest:
+                units_by_id[unit_id]["location"] = dest
+        elif t == "attackEnemy":
+            unit_id = details.get("unitId")
+            # Simulación simple: la unidad IA sobrevive pero pierde 20 de salud, la unidad enemiga muere
+            if unit_id in units_by_id:
+                prev_health = units_by_id[unit_id].get("health", 100)
+                new_health = max(0, prev_health - 20)
+                units_by_id[unit_id]["health"] = new_health
+                if new_health == 0:
+                    dead_units.add(unit_id)
+    # Construir la respuesta
+    updates = []
+    for unit_id, unit in units_by_id.items():
+        # Si la unidad murió en este turno
+        if unit_id in dead_units:
+            updates.append({
+                "id": unit_id,
+                "newPosition": unit.get("location", initial_pos[unit_id]),
+                "newHealth": 0
+            })
+        else:
+            updates.append({
+                "id": unit_id,
+                "newPosition": unit.get("location", initial_pos[unit_id]),
+                "newHealth": unit.get("health", 100)
+            })
+    return {"unitUpdates": updates}
+
+def get_ai_actions_reduced(players: list) -> list:
+    """
+    IA avanzada: recibe la lista de jugadores (formato reducido) y utiliza Groq para decidir movimientos y ataques de la IA.
+    Solo puede modificar sus propias unidades/ciudades. Analiza posiciones, rangos y ataques según tipo de unidad.
+    Devuelve la lista de jugadores actualizada.
+    """
+    import json
+    import re
+    # --- Guardar el input original para devolverlo tal cual si la IA falla ---
+    original_players = json.loads(json.dumps(players))  # deep copy, sin modificar
+    # --- Preprocesado: asegurar que todos los jugadores tienen 'units' y 'cities' ---
+    players_fixed = []
+    for p in players:
+        p_fixed = dict(p)
+        if 'units' not in p_fixed:
+            p_fixed['units'] = []
+        if 'cities' not in p_fixed:
+            p_fixed['cities'] = []
+        players_fixed.append(p_fixed)
+    # Prompt ultraestricto para Groq
+    system_prompt = (
+        "You are the AI of a turn-based strategy game. You receive a JSON with a list of players, each with all their attributes, cities, and units, in the exact format shown below.\n"
+        "\nYou may ONLY modify the values of fields inside the 'units' and 'cities' arrays of AI players (whose id starts with 'rival').\n"
+        "You MUST NOT add, remove, rename, or reorder any field, city, or unit.\n"
+        "You MUST NOT invent or delete any data.\n"
+        "You MUST NOT remove or empty the 'units' or 'cities' arrays of any player.\n"
+        "You MUST NOT add or remove units or cities from any player.\n"
+        "You MUST NOT modify anything belonging to human players.\n"
+        "You MUST NOT modify any field outside of 'units' and 'cities' of AI players.\n"
+        "You MUST return EXACTLY the same JSON, with the same structure, the same attributes, and the same order, except for the values of fields inside the units/cities of the AI that you decide to change.\n"
+        "If there are no changes, return the exact same input object.\n"
+        "DO NOT add explanations, only return the JSON.\n"
+        "\nExample input (truncated):\n"
+        "{\n  'players': [\n    {\n      'id': 'player1',\n      'cities': [\n        { 'id': '2318', 'name': 'sasasa', ...other attributes... }\n      ],\n      'units': [\n        { 'id': 'warrior_1747924624286', 'name': 'Warrior', ...other attributes... }\n      ],\n      ...other attributes...\n    },\n    {\n      'id': 'rival1',\n      'cities': [\n        { 'id': '3433', 'name': 'Ciudad Civilización 1', ...other attributes... }\n      ],\n      'units': [\n        { 'id': 'warrior_1747924624287', 'name': 'Warrior', ...other attributes... },\n          ...\n      ],\n      ...other attributes...\n    }\n  ]\n}\n"
+        "\nExample output (only the 'position' value of a unit of 'rival1' is changed, everything else is identical):\n"
+        "{\n  'players': [\n    {\n      'id': 'player1',\n      'cities': [ ...same as input... ],\n      'units': [ ...same as input... ],\n      ...other attributes...\n    },\n    {\n      'id': 'rival1',\n      'cities': [ ...same as input... ],\n      'units': [\n        { 'id': 'warrior_1747924624287', 'name': 'Warrior', ...other attributes..., 'position': { 'x': 35, 'y': 33 } },\n        ...other units same as input...\n      ],\n      ...other attributes...\n    }\n  ]\n}\n"
+        "\nDO NOT MODIFY ANY OTHER ATTRIBUTE, DO NOT CHANGE THE ORDER, DO NOT REMOVE OR INVENT FIELDS.\n"
+        "NEVER remove or empty the 'units' or 'cities' arrays of any player.\n"
+        "ALWAYS return the full JSON, with the exact same structure, and only valid changes to the values of your own units/cities.\n"
+    )
+    try:
+        completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{json.dumps({'players': players_fixed})}"}
+            ],
+            model="gemma2-9b-it",
+            max_tokens=3000
+        )
+        response = completion.choices[0].message.content
+        # LOG: respuesta bruta de la IA
+        logging.info("[AI DEBUG] Respuesta bruta de la IA:\n%s", response)
+    except Exception as e:
+        logging.error(f"Error calling Groq for strict AI: {e}")
+        return {"players": players_fixed}
+    # Extraer JSON de la respuesta
+    try:
+        json_match = re.search(r"```json|```|`|\n|\r", response)
+        if json_match:
+            # Si detectamos basura, abortamos y devolvemos el input original
+            logging.error("Respuesta de la IA contiene basura o delimitadores extraños. Se ignora la respuesta y se devuelve el input original.")
+            if not isinstance(original_players, list):
+                logging.error("original_players no es una lista, posible corrupción de datos.")
+                return {"players": players_fixed}
+            return {"players": original_players}
+        ai_json = json.loads(response.replace("'", '"'))
+        # Puede devolver {"players": [...]}, o solo la lista
+        if isinstance(ai_json, dict) and "players" in ai_json:
+            result_players = ai_json["players"]
+        elif isinstance(ai_json, list):
+            result_players = ai_json
+        else:
+            return {"players": original_players}  # fallback: sin cambios
+        # --- SMART MERGE: solo actualiza lo que se puede, nunca cambia la estructura ---
+        merged_players = smart_merge_players(original_players, result_players)
+        logging.info("[AI DEBUG] Output final al frontend (smart merge):\n%s", json.dumps(merged_players, indent=2, ensure_ascii=False))
+        return {"players": merged_players}
+    except Exception as e:
+        logging.error(f"Error al parsear respuesta Groq IA avanzada reducida: {e}")
+        if not isinstance(original_players, list):
+            logging.error("original_players no es una lista, posible corrupción de datos.")
+            return {"players": players_fixed}
+        return {"players": original_players}
+def smart_merge_players(original_players, ai_players):
+    """
+    Dado el input original y la respuesta de la IA (ya parseada y validada como lista),
+    recorre cada jugador, ciudad y unidad, y SOLO actualiza los valores de los campos que existen en ambos,
+    nunca añade ni elimina nada, y nunca cambia la estructura.
+    Si la IA devuelve basura, ignora ese campo y deja el original.
+    """
+    merged = []
+    for orig_p, ai_p in zip(original_players, ai_players):
+        merged_p = dict(orig_p)
+        # Solo actualizamos units y cities de rivales
+        if str(orig_p.get('id', '')).startswith('rival'):
+            # --- CITIES ---
+            orig_cities = orig_p.get('cities', [])
+            ai_cities = ai_p.get('cities', []) if isinstance(ai_p.get('cities', []), list) else []
+            merged_cities = []
+            for oc, ac in zip(orig_cities, ai_cities):
+                mc = dict(oc)
+                for k in oc:
+                    if k in ac and type(ac[k]) == type(oc[k]):
+                        mc[k] = ac[k]
+                merged_cities.append(mc)
+            merged_p['cities'] = merged_cities
+            # --- UNITS ---
+            orig_units = orig_p.get('units', [])
+            ai_units = ai_p.get('units', []) if isinstance(ai_p.get('units', []), list) else []
+            merged_units = []
+            for ou, au in zip(orig_units, ai_units):
+                mu = dict(ou)
+                for k in ou:
+                    if k in au and type(au[k]) == type(ou[k]):
+                        mu[k] = au[k]
+                merged_units.append(mu)
+            merged_p['units'] = merged_units
+        merged.append(merged_p)
+    return merged
+
+# --- JSON de referencia para validación exhaustiva ---
+reference_format = {
+    "players": [
+        {
+            "id": "player1",
+            "cities": [
+                {
+                    "id": "2318",
+                    "name": "sasasa",
+                    "ownerId": "player1",
+                    "position": {"x": 23, "y": 18},
+                    "population": 1,
+                    "maxPopulation": 5,
+                    "populationGrowth": 0,
+                    "citizens": {
+                        "unemployed": 1,
+                        "farmers": 0,
+                        "workers": 0,
+                        "merchants": 0,
+                        "scientists": 0,
+                        "artists": 0
+                    },
+                    "food": 6,
+                    "foodPerTurn": 1,
+                    "foodToGrow": 20,
+                    "production": 0,
+                    "productionPerTurn": 1,
+                    "gold": 0,
+                    "goldPerTurn": 1,
+                    "science": 0,
+                    "sciencePerTurn": 1,
+                    "culture": 0,
+                    "culturePerTurn": 1,
+                    "happiness": 0,
+                    "turnsFounded": 1,
+                    "era": "ancient",
+                    "buildings": [],
+                    "workingTiles": [],
+                    "defense": 5,
+                    "health": 100,
+                    "maxHealth": 100,
+                    "cultureBorder": 1,
+                    "cultureToExpand": 30,
+                    "specialists": {
+                        "scientists": 0,
+                        "merchants": 0,
+                        "artists": 0,
+                        "engineers": 0
+                    },
+                    "level": "settlement"
+                }
+            ],
+            "units": [
+                {
+                    "id": "warrior_1747924624286",
+                    "name": "Warrior",
+                    "type": "warrior",
+                    "owner": "player1",
+                    "position": {"x": 23, "y": 16},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 0,
+                    "maxMovementPoints": 2,
+                    "strength": 25,
+                    "health": 115,
+                    "maxHealth": 115,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "isRanged": False,
+                    "attackRange": 1,
+                    "availableActions": ["move"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "canSwim": False
+                }
+            ]
+        },
+        {
+            "id": "rival1",
+            "cities": [
+                {
+                    "id": "3433",
+                    "name": "Ciudad Civilización 1",
+                    "ownerId": "rival1",
+                    "position": {"x": 34, "y": 33},
+                    "population": 1,
+                    "maxPopulation": 5,
+                    "populationGrowth": 0,
+                    "citizens": {
+                        "unemployed": 1,
+                        "farmers": 0,
+                        "workers": 0,
+                        "merchants": 0,
+                        "scientists": 0,
+                        "artists": 0
+                    },
+                    "food": 7,
+                    "foodPerTurn": 1,
+                    "foodToGrow": 20,
+                    "production": 0,
+                    "productionPerTurn": 1,
+                    "gold": 0,
+                    "goldPerTurn": 1,
+                    "science": 0,
+                    "sciencePerTurn": 1,
+                    "culture": 0,
+                    "culturePerTurn": 1,
+                    "happiness": 0,
+                    "turnsFounded": 1,
+                    "era": "ancient",
+                    "buildings": [],
+                    "workingTiles": [],
+                    "defense": 5,
+                    "health": 100,
+                    "maxHealth": 100,
+                    "cultureBorder": 1,
+                    "cultureToExpand": 30,
+                    "specialists": {
+                        "scientists": 0,
+                        "merchants": 0,
+                        "artists": 0,
+                        "engineers": 0
+                    },
+                    "level": "settlement"
+                }
+            ],
+            "units": [
+                {
+                    "id": "warrior_1747924624287",
+                    "name": "Warrior",
+                    "type": "warrior",
+                    "owner": "rival1",
+                    "position": {"x": 34, "y": 33},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 25,
+                    "health": 115,
+                    "maxHealth": 115,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "isRanged": False,
+                    "attackRange": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "canSwim": False
+                },
+                {
+                    "id": "archer_1747924624287",
+                    "name": "Archer",
+                    "type": "archer",
+                    "owner": "rival1",
+                    "position": {"x": 34, "y": 33},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 8,
+                    "health": 110,
+                    "maxHealth": 110,
+                    "isRanged": True,
+                    "maxRange": 2,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "attackRange": 2,
+                    "canSwim": False
+                }
+            ]
+        },
+        {
+            "id": "rival2",
+            "cities": [
+                {
+                    "id": "618",
+                    "name": "Ciudad Civilización 2",
+                    "ownerId": "rival2",
+                    "position": {"x": 6, "y": 18},
+                    "population": 1,
+                    "maxPopulation": 5,
+                    "populationGrowth": 0,
+                    "citizens": {
+                        "unemployed": 1,
+                        "farmers": 0,
+                        "workers": 0,
+                        "merchants": 0,
+                        "scientists": 0,
+                        "artists": 0
+                    },
+                    "food": 7,
+                    "foodPerTurn": 1,
+                    "foodToGrow": 20,
+                    "production": 0,
+                    "productionPerTurn": 1,
+                    "gold": 0,
+                    "goldPerTurn": 1,
+                    "science": 0,
+                    "sciencePerTurn": 1,
+                    "culture": 0,
+                    "culturePerTurn": 1,
+                    "happiness": 0,
+                    "turnsFounded": 1,
+                    "era": "ancient",
+                    "buildings": [],
+                    "workingTiles": [],
+                    "defense": 5,
+                    "health": 100,
+                    "maxHealth": 100,
+                    "cultureBorder": 1,
+                    "cultureToExpand": 30,
+                    "specialists": {
+                        "scientists": 0,
+                        "merchants": 0,
+                        "artists": 0,
+                        "engineers": 0
+                    },
+                    "level": "settlement"
+                }
+            ],
+            "units": [
+                {
+                    "id": "warrior_1747924624287",
+                    "name": "Warrior",
+                    "type": "warrior",
+                    "owner": "rival2",
+                    "position": {"x": 6, "y": 18},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 25,
+                    "health": 115,
+                    "maxHealth": 115,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "isRanged": False,
+                    "attackRange": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "canSwim": False
+                },
+                {
+                    "id": "archer_1747924624287",
+                    "name": "Archer",
+                    "type": "archer",
+                    "owner": "rival2",
+                    "position": {"x": 6, "y": 18},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 8,
+                    "health": 110,
+                    "maxHealth": 110,
+                    "isRanged": True,
+                    "maxRange": 2,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "attackRange": 2,
+                    "canSwim": False
+                }
+            ]
+        },
+        {
+            "id": "rival3",
+            "cities": [
+                {
+                    "id": "3233",
+                    "name": "Ciudad Civilización 3",
+                    "ownerId": "rival3",
+                    "position": {"x": 32, "y": 33},
+                    "population": 1,
+                    "maxPopulation": 5,
+                    "populationGrowth": 0,
+                    "citizens": {
+                        "unemployed": 1,
+                        "farmers": 0,
+                        "workers": 0,
+                        "merchants": 0,
+                        "scientists": 0,
+                        "artists": 0
+                    },
+                    "food": 7,
+                    "foodPerTurn": 1,
+                    "foodToGrow": 20,
+                    "production": 0,
+                    "productionPerTurn": 1,
+                    "gold": 0,
+                    "goldPerTurn": 1,
+                    "science": 0,
+                    "sciencePerTurn": 1,
+                    "culture": 0,
+                    "culturePerTurn": 1,
+                    "happiness": 0,
+                    "turnsFounded": 1,
+                    "era": "ancient",
+                    "buildings": [],
+                    "workingTiles": [],
+                    "defense": 5,
+                    "health": 100,
+                    "maxHealth": 100,
+                    "cultureBorder": 1,
+                    "cultureToExpand": 30,
+                    "specialists": {
+                        "scientists": 0,
+                        "merchants": 0,
+                        "artists": 0,
+                        "engineers": 0
+                    },
+                    "level": "settlement"
+                }
+            ],
+            "units": [
+                {
+                    "id": "warrior_1747924624288",
+                    "name": "Warrior",
+                    "type": "warrior",
+                    "owner": "rival3",
+                    "position": {"x": 32, "y": 33},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 25,
+                    "health": 115,
+                    "maxHealth": 115,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "isRanged": False,
+                    "attackRange": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "canSwim": False
+                },
+                {
+                    "id": "archer_1747924624288",
+                    "name": "Archer",
+                    "type": "archer",
+                    "owner": "rival3",
+                    "position": {"x": 32, "y": 33},
+                    "turnsToComplete": 0,
+                    "cost": 0,
+                    "movementPoints": 2,
+                    "maxMovementPoints": 2,
+                    "strength": 8,
+                    "health": 110,
+                    "maxHealth": 110,
+                    "isRanged": True,
+                    "maxRange": 2,
+                    "attacksPerTurn": 1,
+                    "maxattacksPerTurn": 1,
+                    "availableActions": ["move", "attack", "retreat"],
+                    "canMove": True,
+                    "isFortified": False,
+                    "level": 1,
+                    "attackRange": 2,
+                    "canSwim": False
+                }
+            ]
         }
-    )
-    ai = [GameStatePlayer(
-        cities=[],
-        units=[],
-        technologies=[],
-        resources={}
-    )]
-
-    world_map = GameMap(
-        size=MapSize(width=10, height=10),
-        explored=[[0] * 10 for _ in range(10)],
-        visible_objects=[]
-    )
-
-    # Example dummy data for GameState (adjust fields as needed for your model)
-    dummy_state = GameState(
-        turn=1,
-        current_player="player1",
-        player=you,
-        ai=ai,
-        map=world_map
-    )
-
-    def test_ai():
-        result = get_ai_actions(dummy_state)
-        print(result)
-
-    test_ai()
+    ]
+}

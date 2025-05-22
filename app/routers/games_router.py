@@ -82,6 +82,8 @@ async def save_game(
 ):
     objid = ObjectId(game_id)
     now = datetime.now(timezone.utc)
+
+    # Validar y normalizar gamesession antes de guardar
     update = {
         "$set": {
             "gamesession": body.gamesession,
@@ -94,231 +96,67 @@ async def save_game(
     return _convert_id(updated)
 
 
-@router.post("/{game_id}/action", response_model=GameOut, summary="Apply a player action and return the updated game state")
-async def player_action(
-    payload: Union[Dict[str, Any], List[Dict[str, Any]]] = Body(...),
-    game_id: str = Path(...),
-    current_user: dict = Depends(get_current_user),
-):
-    # 1) Ownership check
-    user_id = _get_user_id(current_user)
-    object_id = ObjectId(game_id)
-    doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
-    if not doc:
-        raise HTTPException(status_code=404, detail="game not found or not owned by user")
-    
-    # 2) Deserialize game state
-    game = Game(**doc)
-    #gs: GameState = game.game_state
-
-    # 3) Apply action(s) to game state
-    # Accept both a single action or a list of actions
-    actions = payload if isinstance(payload, list) else [payload]
-    errors = []
-    gs_new = deepcopy(gs)
-    for action in actions:
-        t = action.get("type")
-        details = action.get("details", {})
-        error = None
-        if t == "moveUnit":
-            unit_id = details.get("unitId")
-            dest = details.get("destination")
-            if not unit_id or not dest:
-                error = "moveUnit: Missing unitId or destination."
-            elif not any(unit.get("id") == unit_id for unit in gs_new.player.units):
-                error = f"moveUnit: Unit '{unit_id}' not found."
-            else:
-                for unit in gs_new.player.units:
-                    if unit.get("id") == unit_id:
-                        unit["location"] = dest
-        elif t == "buildStructure":
-            city_id = details.get("cityId")
-            structure = details.get("structureType")
-            if not city_id or not structure:
-                error = "buildStructure: Missing cityId or structureType."
-            elif not any(city.get("id") == city_id for city in gs_new.player.cities):
-                error = f"buildStructure: City '{city_id}' not found."
-            else:
-                for city in gs_new.player.cities:
-                    if city.get("id") == city_id:
-                        city.setdefault("buildings", []).append(structure)
-        elif t == "trainUnit":
-            city_id = details.get("cityId")
-            unit_type = details.get("unitType")
-            quantity = details.get("quantity", 1)
-            city = next((c for c in gs_new.player.cities if c.get("id") == city_id), None)
-            if not city_id or not unit_type:
-                error = "trainUnit: Missing cityId or unitType."
-            elif not city:
-                error = f"trainUnit: City '{city_id}' not found."
-            else:
-                for _ in range(quantity):
-                    new_unit = {
-                        "id": f"player_unit_{len(gs_new.player.units)+1}",
-                        "type": unit_type,
-                        "location": city.get("location"),
-                        "owner": "player",
-                        "movement_points": 2
-                    }
-                    gs_new.player.units.append(new_unit)
-        elif t == "improveResource":
-            res_type = details.get("resourceType")
-            if not res_type:
-                error = "improveResource: Missing resourceType."
-            elif res_type not in gs_new.player.resources:
-                error = f"improveResource: Resource '{res_type}' not found."
-            else:
-                gs_new.player.resources[res_type]["improved"] = True
-        elif t == "researchTechnology":
-            tech_name = details.get("technology")
-            if not tech_name:
-                error = "researchTechnology: Missing technology."
-            elif any(t.get("name") == tech_name for t in gs_new.player.technologies):
-                error = f"researchTechnology: Technology '{tech_name}' already researched."
-            else:
-                gs_new.player.technologies.append({"name": tech_name, "turns_remaining": 0})
-        elif t == "foundCity":
-            city_id = details.get("cityId", f"player_city_{len(gs_new.player.cities)+1}")
-            location = details.get("location")
-            if not location:
-                error = "foundCity: Missing location."
-            elif any(c.get("id") == city_id for c in gs_new.player.cities):
-                error = f"foundCity: City '{city_id}' already exists."
-            else:
-                new_city = {
-                    "id": city_id,
-                    "name": city_id,
-                    "location": location,
-                    "buildings": [],
-                    "population": 1,
-                    "owner": "player"
-                }
-                gs_new.player.cities.append(new_city)
-        elif t == "attackEnemy":
-            loc = details.get("location")
-            if not loc:
-                error = "attackEnemy: Missing location."
-            else:
-                # Asegurarse de que hay al menos un jugador IA
-                if not gs_new.ai or len(gs_new.ai) == 0:
-                    error = "attackEnemy: No AI players found."
-                    continue
-                    
-                # Buscamos unidades en la posición indicada en todos los jugadores IA
-                units_found = False
-                for ai_idx, ai_player in enumerate(gs_new.ai):
-                    before_count = len(ai_player.units)
-                    ai_player.units = [
-                        u for u in ai_player.units
-                        if u.get("location") != loc
-                    ]
-                    # Si encontramos unidades en esta posición
-                    if len(ai_player.units) < before_count:
-                        units_found = True
-                        gs_new.ai[ai_idx] = ai_player
-                
-                if not units_found:
-                    error = f"attackEnemy: No AI unit found at location {loc}."
-        else:
-            error = f"Unknown action type: {t}"
-        if error:
-            errors.append({"action": t, "details": details, "error": error})
-
-    if errors:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "One or more actions failed validation.", "errors": errors}
-        )
-
-    # 4) Persist updated state & timestamp
-    await db.games.update_one(
-        {"_id": object_id},
-        {
-            "$set": {
-                "gamesession": gs_new.model_dump(),
-                "last_saved": datetime.now(timezone.utc)
-            }
-        }
-    )
-
-    # 5) Return updated game state
-    updated = await db.games.find_one({"_id": object_id})
-    return _convert_id(updated)
-
-
-@router.post("/{game_id}/endTurn", response_model=GameOut, summary="Finish player turn, advance AI, etc.")
-async def end_turn(
+@router.post("/{game_id}/action", response_model=GameOut, summary="Apply player action to game state")
+async def apply_action(
     payload: Dict[str, Any],
     game_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    # 1) Ownership check
     user_id = _get_user_id(current_user)
-    object_id = ObjectId(game_id)
-    doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
+    from bson import ObjectId
+    doc = None
+    object_id = None
+    if ObjectId.is_valid(game_id):
+        object_id = ObjectId(game_id)
+        doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
+    if not doc:
+        doc = await db.games.find_one({"name": game_id})
+    if not doc:
+        doc = await db.games.find_one({"scenario_id": game_id})
     if not doc:
         raise HTTPException(status_code=404, detail="game not found or not owned by user")
-    
-    # 2) Deserialize game state
-    game = Game(**doc)
-    #gs: GameState = game.game_state
+    if not object_id and doc.get("_id"):
+        object_id = doc["_id"]
 
-    # --- Update explored area around all player cities before AI turn ---
-    for city in gs.player.cities:
-        loc = city.get("location")
-        if loc and isinstance(loc, dict) and "x" in loc and "y" in loc:
-            set_explored_radius(gs.map.explored, (loc["x"], loc["y"]), radius=2)
-
-    # 3) Apply player end turn logic (update state as needed)
-    # ...apply any player end turn logic here...
-
-    # 4) Call AI agent to advance AI turn - with error handling
+    # gamesession puede venir en el payload o en el doc
+    import json
+    gs_data = None
+    if "gamesession" in payload:
+        gs_raw = payload["gamesession"]
+    elif hasattr(doc, "gamesession"):
+        gs_raw = doc["gamesession"]
+    else:
+        gs_raw = None
+    if gs_raw is None:
+        raise HTTPException(status_code=400, detail="No se proporcionó gamesession en el payload ni en la base de datos")
+    if isinstance(gs_raw, str):
+        try:
+            gs_data = json.loads(gs_raw)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"gamesession no es un JSON válido: {str(e)}")
+    else:
+        gs_data = gs_raw
+    if isinstance(gs_data, dict) and "gamesession" in gs_data:
+        gs_data = gs_data["gamesession"]
+    required_fields = ["current_player", "player", "ai", "map"]
+    missing = [f for f in required_fields if f not in gs_data]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"gamesession no tiene la estructura GameState esperada. Faltan campos: {missing}")
     try:
-        ai_result = ai_agent.get_ai_actions(gs)
-        print(f"AI actions: {ai_result}")
-        ai_actions = []
-        if isinstance(ai_result, dict):
-            ai_actions_seq = ai_result.get("ai_actions_sequence", [])
-            print(f"AI actions sequence: {ai_actions_seq}")
-            # Accept both new and old AI action formats
-            def safe_merge(a):
-                if not a.get("action_type"):
-                    return None
-                entity = a.get("entity") or {}
-                path = a.get("path")
-                path_dict = path[0] if path and isinstance(path, list) and len(path) > 0 and isinstance(path[0], dict) else {}
-                details = {**entity, **path_dict} if entity or path_dict else {}
-                return {
-                    "type": a.get("action_type"),
-                    "details": details
-                }
-            ai_actions = [safe_merge(a) for a in ai_actions_seq if a.get("action_type")]
-            ai_actions = [a for a in ai_actions if a is not None]
-            # If still empty, fallback to actions from ai_result if present
-            if not ai_actions and "actions" in ai_result and isinstance(ai_result["actions"], list):
-                ai_actions = ai_result["actions"]
+        gs = GameState(**gs_data)
     except Exception as e:
-        print(f"Error getting AI actions: {e}")
-        # Fallback: Hacer que la IA funde una ciudad en situación de emergencia
-        ai_actions = [{
-            "type": "foundCity",
-            "details": {
-                "cityId": f"ai_city_{len(gs.ai[0].cities if gs.ai and len(gs.ai) > 0 else 0)+1}",
-                "location": {"x": gs.map.size.width // 2, "y": gs.map.size.height // 2}
-            }
-        }]
+        raise HTTPException(status_code=400, detail=f"gamesession no tiene la estructura GameState válida: {str(e)}")
 
-    # --- Ensure AI actions are applied and saved even if empty ---
-    # Always use the updated state after applying AI actions
-    gs = apply_ai_actions(gs, ai_actions)
-    
-    print(f"Game state after AI actions: {gs}")
+    # Aplicar acción del jugador
+    action = payload.get("action")
+    if not action:
+        raise HTTPException(status_code=400, detail="No se proporcionó acción a aplicar")
+    try:
+        gs = apply_player_actions(gs, [action])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error aplicando acción: {str(e)}")
 
-    # Increment turn and switch current_player
-    gs.turn += 1
-    gs.current_player = "player"
-
-    # 5) Persist updated state & timestamp
+    # Guardar el nuevo estado
     await db.games.update_one(
         {"_id": object_id},
         {
@@ -329,10 +167,29 @@ async def end_turn(
             }
         }
     )
-
-    # 6) Return updated game state
     updated = await db.games.find_one({"_id": object_id})
     return _convert_id(updated)
+
+
+@router.post("/{game_id}/endTurn", summary="Procesa el final de turno solo con ciudades y unidades", response_model=Dict[str, Any])
+async def end_turn_minimal(
+    payload: Dict[str, Any],
+    game_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Recibe solo las ciudades y unidades agrupadas por jugador/IA, ejecuta la lógica de IA y de final de turno,
+    y devuelve solo las ciudades y unidades actualizadas en el mismo formato reducido.
+    """
+    # Validar formato de entrada
+    players = payload.get("players")
+    if not players or not isinstance(players, list):
+        raise HTTPException(status_code=400, detail="El payload debe contener una lista 'players'.")
+
+    # Aquí puedes aplicar la lógica de final de turno y de IA sobre players
+    from app.services.ai_agent import get_ai_actions_reduced
+    updated_players = get_ai_actions_reduced(players)
+    return {"players": updated_players}
 
 
 @router.post("/{game_id}/cheat", response_model=CheatResponse, summary="Apply a cheat code")
@@ -662,3 +519,42 @@ def apply_player_actions(gs: GameState, player_actions: list) -> GameState:
                     gs.ai[ai_idx] = ai_player
         # ...add more action types as needed...
     return gs
+
+@router.post("/{game_id}/endTurn/ai-units", summary="Devuelve los cambios de posición y salud de las unidades IA tras el turno")
+async def end_turn_ai_units(
+    payload: Dict[str, Any],
+    game_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Endpoint auxiliar para devolver los cambios de las unidades IA tras el turno, en el formato solicitado por el frontend.
+    """
+    user_id = _get_user_id(current_user)
+    object_id = ObjectId(game_id)
+    doc = await db.games.find_one({"_id": object_id, "user_id": user_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="game not found or not owned by user")
+    game = Game(**doc)
+    gs = game.gamesession if hasattr(game, "gamesession") else game.game_state
+
+    # Obtener acciones IA usando el formato reducido (players)
+    # Extraer el formato reducido desde gamesession si es string
+    import json
+    players = None
+    if isinstance(gs, str):
+        try:
+            gs_data = json.loads(gs)
+            if isinstance(gs_data, dict) and "players" in gs_data:
+                players = gs_data["players"]
+            elif isinstance(gs_data, list):
+                players = gs_data
+        except Exception:
+            players = None
+    elif isinstance(gs, dict) and "players" in gs:
+        players = gs["players"]
+    if not players:
+        raise HTTPException(status_code=400, detail="No se pudo extraer el formato reducido de players del gamesession para IA.")
+
+    updated_players = ai_agent.get_ai_actions_reduced(players)
+    # Si quieres devolver solo los cambios de unidades IA, puedes filtrar aquí
+    return {"players": updated_players}
