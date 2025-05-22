@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
 from typing import Dict, List, Any, Union
 from bson import ObjectId
 from datetime import datetime, timezone
+import logging
 from app.auth import get_current_user
 from app.db import db
 from app.schemas import CheatRequest, GameCreate, GameOut, CheatResponse
@@ -380,37 +381,67 @@ async def cheat(
 
 @router.delete("/{game_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a game")
 async def delete_game(
-    game_id: str = Path(..., description="MongoDB ObjectId of the game to delete"),
+    game_id: str = Path(..., description="ID of the game to delete (either MongoDB ObjectId or custom ID)"),
     current_user: dict = Depends(get_current_user),
 ):
     """
     Delete a game by its ID.
     
-    - Verifies that the user is the owner of the game
     - Removes the game from the database
     - Returns a 204 No Content on success
     """
-    # Get user ID
-    user_id = _get_user_id(current_user)
-    
     try:
-        # Create MongoDB ObjectId from game_id
-        object_id = ObjectId(game_id)
+        # Intentamos buscar el juego por varios criterios posibles
+        game = None
         
-        # Check if the game exists and belongs to the user
-        existing_game = await db.games.find_one({"_id": object_id, "user_id": user_id})
-        if not existing_game:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="Game not found or not owned by current user"
-            )
+        # 1. Intenta buscar primero por ObjectId (si es un formato válido)
+        if ObjectId.is_valid(game_id):
+            objid = ObjectId(game_id)
+            game = await db.games.find_one({"_id": objid})
         
-        # Delete the game
-        delete_result = await db.games.delete_one({"_id": object_id, "user_id": user_id})
+        # 2. Si no se encuentra, intenta buscar por el ID proporcionado como un campo directo
+        if game is None:
+            # Podría estar almacenado en scenario_id o ser un formato personalizado
+            game = await db.games.find_one({"scenario_id": game_id})
+        
+        # 3. Si aún no se encuentra, intenta buscar en el campo "name" (también podría usarse como ID)
+        if game is None:
+            game = await db.games.find_one({"name": game_id})
+            
+        # 4. Busca en el campo gamesession, ya que el ID podría estar almacenado como JSON dentro de este campo
+        if game is None:
+            # Usando una expresión regular para buscar el ID dentro del campo gamesession
+            # Esto busca juegos donde el campo gamesession contiene el id específico
+            import json
+            import re
+            # Primero intentamos buscar si el ID está almacenado como parte del JSON en gamesession
+            cursor = db.games.find({"gamesession": {"$regex": game_id}})
+            async for doc in cursor:
+                # Si encontramos coincidencia, verificamos si realmente el ID está en el campo correcto
+                try:
+                    # El campo gamesession puede ser un string JSON o un diccionario
+                    if isinstance(doc["gamesession"], str):
+                        gamesession_data = json.loads(doc["gamesession"])
+                    else:
+                        gamesession_data = doc["gamesession"]
+                    
+                    # Si el ID coincide con el que buscamos, hemos encontrado el juego
+                    if gamesession_data.get("id") == game_id:
+                        game = doc
+                        break
+                except (json.JSONDecodeError, KeyError, AttributeError):
+                    continue
+        
+        # Si aún no hemos encontrado el juego, devolvemos un error 404
+        if game is None:
+            raise HTTPException(status_code=404, detail="game not found")
+        
+        # Borrar el juego usando su _id real
+        delete_result = await db.games.delete_one({"_id": game["_id"]})
         
         if delete_result.deleted_count == 0:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                 detail="Game could not be deleted"
             )
         
@@ -420,9 +451,15 @@ async def delete_game(
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
+        # Proporciona un mensaje de error más descriptivo sobre el problema específico
+        if "Invalid ObjectId" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"El ID proporcionado no es un formato válido: {game_id}"
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid game ID or other error: {str(e)}"
+            detail=f"Error al intentar eliminar el juego: {str(e)}"
         )
 
 
