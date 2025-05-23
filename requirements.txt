@@ -7,5 +7,5 @@ python-jose[cryptography]
 httpx
 python-dotenv
 passlib[bcrypt]
-requests
+requests>=2.32.2
 groq
