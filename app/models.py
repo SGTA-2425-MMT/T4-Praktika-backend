@@ -19,8 +19,9 @@ class User(BaseModel):
     username: str
     email: str
     password_hash: str
-    created_at: datetime
-    last_login: Optional[datetime]
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_login: Optional[datetime] = None
+    is_active: bool = True
 
     class Config:
         json_encoders = { ObjectId: str }
@@ -40,12 +41,14 @@ class GameMap(BaseModel):
     size: MapSize
     explored: List[List[int]]
     visible_objects: List[Dict[str, Any]]
+    stored_tiles: Optional[List[List[Any]]] = None
+    
 
 class GameState(BaseModel):
     turn: int
     current_player: str
     player: GameStatePlayer
-    ai: GameStatePlayer
+    ai: List[GameStatePlayer]
     map: GameMap
 
 class Game(BaseModel):
@@ -57,7 +60,7 @@ class Game(BaseModel):
     last_saved: datetime
     is_autosave: bool
     cheats_used: List[str]
-    game_state: GameState
+    gamesession: str
 
     class Config:
         json_encoders = { ObjectId: str }

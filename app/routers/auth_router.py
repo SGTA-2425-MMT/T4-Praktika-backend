@@ -1,251 +1,153 @@
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from typing import Annotated, Any
-import httpx
+from typing import Dict
 from app.config import settings
-from app.schemas import TokenRequest, TokenResponse, ProfileUpdate, UserOut
-from app.auth import verify_token
+from app.schemas import TokenResponse, ProfileUpdate, UserOut, UserCreate
+from app.auth import (
+    get_current_user, 
+    authenticate_user, 
+    create_access_token, 
+    get_password_hash
+)
+from app.db import db
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
-
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(
-    username: str,
-    email: str,
-    password: str,
-) -> Any:
+    user: UserCreate = None, 
+    username: str = None,
+    email: str = None,
+    password: str = None
+) -> Dict[str, str]:
     """
-    1) Fetch an admin access_token from Keycloak
-    2) Create a new Keycloak user
+    Registra un nuevo usuario en la base de datos. 
+    Acepta datos tanto en el cuerpo JSON como en parámetros de consulta.
     """
-    # Ensure no trailing slash in KEYCLOAK_BASE_URL
-    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-
-    # 1. get admin token
-    token_url = (
-        f"{base_url}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
-    )
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": settings.KEYCLOAK_ADMIN_CLIENT_ID,
-        "client_secret": settings.KEYCLOAK_ADMIN_CLIENT_SECRET,
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(token_url, data=data)
-        if resp.status_code != 200:
-            try:
-                error_json = resp.json()
-            except Exception:
-                error_json = {"error": "admin_token_error", "error_description": resp.text}
+    # Si no hay un cuerpo UserCreate pero hay parámetros de consulta, usamos esos
+    if user is None:
+        if not all([username, email, password]):
             raise HTTPException(
-                status_code=resp.status_code,
-                detail={
-                    "error": "admin_token_error",
-                    "error_description": error_json.get("error_description", resp.text),
-                    "status_code": resp.status_code
-                }
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Se requieren los campos username, email y password"
             )
-        admin_token = resp.json()["access_token"]
-
-    # 2. create the user
-    user_url = (
-        f"{base_url}/admin/realms/"
-        f"{settings.KEYCLOAK_REALM}/users"
-    )
-    payload = {
-        "username": username,
-        "email": email,
-        "enabled": True,
-        "credentials": [
-            {"type": "password", "value": password, "temporary": False}
-        ],
-    }
-    headers = {"Authorization": f"Bearer {admin_token}"}
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(user_url, json=payload, headers=headers)
-        if resp.status_code != 201:
-            try:
-                error_json = resp.json()
-            except Exception:
-                error_json = {"error": "user_creation_error", "error_description": resp.text}
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail={
-                    "error": "user_creation_error",
-                    "error_description": error_json.get("error_description", resp.text),
-                    "status_code": resp.status_code
-                }
-            )
-
-        # Get the user id from the Location header
-        location = resp.headers.get("Location")
-        user_id = None
-        if location:
-            user_id = location.rstrip('/').split('/')[-1]
-        if not user_id:
-            # fallback: try to get user by username
-            search_url = (
-                f"{base_url}/admin/realms/"
-                f"{settings.KEYCLOAK_REALM}/users?username={username}"
-            )
-            search_resp = await client.get(search_url, headers=headers)
-            if search_resp.status_code == 200 and search_resp.json():
-                user_id = search_resp.json()[0].get("id")
-
-        # Send verification email if user_id found
-        if user_id:
-            verify_url = (
-                f"{base_url}/admin/realms/"
-                f"{settings.KEYCLOAK_REALM}/users/{user_id}/send-verify-email"
-            )
-            verify_resp = await client.put(verify_url, headers=headers)
-            if verify_resp.status_code not in (204, 202):
-                # Not fatal, but log/send info if needed
-                pass
-
-    return {"message": "user created"}
-
-
-@router.post("/login", response_model=TokenResponse)
-async def login(form_data: TokenRequest):
-    """
-    Password-grant against Keycloak’s token endpoint.
-    """
-    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-    token_url = (
-        f"{base_url}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
-    )
-    data = {
-        "grant_type": "password",
-        "client_id": settings.KEYCLOAK_CLIENT_ID,
-        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
-        "username": form_data.username,
-        "password": form_data.password,
-        "scope": "openid"
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(token_url, data=data)
-        if resp.status_code != 200:
-            try:
-                error_json = resp.json()
-            except Exception:
-                error_json = {"error": "login_error", "error_description": resp.text}
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail={
-                    "error": error_json.get("error", "login_error"),
-                    "error_description": error_json.get("error_description", resp.text),
-                    "status_code": resp.status_code
-                }
-            )
-        return resp.json()
-
-
-@router.get("/profile", response_model=UserOut)
-async def get_profile(claims: dict = Depends(verify_token)):
-    """
-    Call Keycloak’s userinfo endpoint and return the core fields.
-    """
-    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-
-    url = (
-        f"{base_url}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/userinfo"
-    )
-    print(claims)
-    headers = {"Authorization": f"Bearer {claims['token']}"}
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not feth user info - token not valid for userinfo"
-            )
+        user = UserCreate(username=username, email=email, password=password)
+    
+    # Verificar si el usuario ya existe
+    existing_user = await db.users.find_one({"username": user.username})
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El nombre de usuario ya está en uso"
+        )
         
-        info = resp.json()
-
-    return UserOut(
-        sub=info["sub"],
-        username=info.get("preferred_username"),
-        email=info.get("email"),
-        created_at=None,
-        last_login=None
-    )
-
-@router.post("/logout")
-async def logout(refresh_token: Annotated[str, Body(..., embed=True)], claims: dict = Depends(verify_token)):
-    """
-    Call Keycloak’s logout endpoint.
-    """
-    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-
-    url = (
-        f"{base_url}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/logout"
-    )
-
-    data = {
-        "client_id": settings.KEYCLOAK_CLIENT_ID,
-        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
-        "refresh_token": refresh_token,
+    # Verificar si el email ya existe
+    existing_email = await db.users.find_one({"email": user.email})
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El correo electrónico ya está registrado"
+        )
+        
+    # Crear el usuario
+    hashed_password = get_password_hash(user.password)
+    user_data = {
+        "username": user.username,
+        "email": user.email,
+        "password_hash": hashed_password,
+        "created_at": datetime.now(tz=datetime.timezone.utc),
+        "last_login": None,
+        "is_active": True
     }
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, data=data)
-        resp.raise_for_status()
-
-    return {"message": "Logged out"}
-
-
-@router.put("/profile", response_model=UserOut)
-async def update_profile(
-    update: ProfileUpdate, claims: dict = Depends(verify_token)
+    
+    result = await db.users.insert_one(user_data)
+    
+    return {"id": str(result.inserted_id), "message": "Usuario registrado correctamente"}
+    
+@router.post("/token", response_model=TokenResponse)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Autentica un usuario y devuelve un token de acceso
+    """
+    user = await authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Nombre de usuario o contraseña incorrectos",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    # Crear token de acceso
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user["_id"])},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60  # Convertir minutos a segundos
+    }
+    
+@router.get("/me", response_model=UserOut)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """
+    Devuelve información del usuario actual
+    """
+    return {
+        "_id": str(current_user["_id"]),
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "created_at": current_user["created_at"],
+        "last_login": current_user.get("last_login")
+    }
+    
+@router.put("/me", response_model=UserOut)
+async def update_me(
+    profile: ProfileUpdate,
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    Update Keycloak user via Admin API.
+    Actualiza el perfil del usuario actual
     """
-    base_url = str(settings.KEYCLOAK_BASE_URL).rstrip('/')
-
-    # 1) get admin token (same as in register)
-    token_url = (
-        f"{base_url}/realms/"
-        f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/token"
-    )
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": settings.KEYCLOAK_ADMIN_CLIENT_ID,
-        "client_secret": settings.KEYCLOAK_ADMIN_CLIENT_SECRET,
+    user_id = current_user["_id"]
+    update_data = {}
+    
+    # Solo actualizamos los campos que se proporcionan
+    if profile.username is not None:
+        # Verificar si el nombre de usuario ya existe
+        if profile.username != current_user["username"]:
+            existing_user = await db.users.find_one({"username": profile.username})
+            if existing_user:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="El nombre de usuario ya está en uso"
+                )
+        update_data["username"] = profile.username
+        
+    if profile.email is not None:
+        # Verificar si el correo ya existe
+        if profile.email != current_user["email"]:
+            existing_email = await db.users.find_one({"email": profile.email})
+            if existing_email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="El correo electrónico ya está registrado"
+                )
+        update_data["email"] = profile.email
+    
+    if update_data:
+        await db.users.update_one({"_id": user_id}, {"$set": update_data})
+        
+    # Obtener usuario actualizado
+    updated_user = await db.users.find_one({"_id": user_id})
+    
+    return {
+        "_id": str(updated_user["_id"]),
+        "username": updated_user["username"],
+        "email": updated_user["email"],
+        "created_at": updated_user["created_at"],
+        "last_login": updated_user.get("last_login")
     }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(token_url, data=data)
-        resp.raise_for_status()
-        admin_token = resp.json()["access_token"]
-
-    # 2) patch the user
-    headers = {"Authorization": f"Bearer {admin_token}"}
-    user_id = claims["sub"]
-
-    if update.username or update.email:
-        payload = {}
-        if update.username:
-            payload['username'] = update.username
-        if update.email:
-            payload['email'] = update.email
-
-    user_url = (
-        f"{base_url}/admin/realms/"
-        f"{settings.KEYCLOAK_REALM}/users/{user_id}"
-    )
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.put(user_url, json=payload, headers=headers)
-        resp.raise_for_status()
-
-    # Return updated info
-    return await get_profile(claims)
