@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 
 from app.models import Game
@@ -11,7 +10,7 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
     """
     code = req.cheat_code
     targ = req.target
-    gs = game.game_state
+    gs = game.gamesession
 
     if code == "level_up":
         if targ.type != "city":
@@ -19,7 +18,7 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
                 success=False,
                 message="Cheat code 'level_up' can only be used on cities.",
                 affected_entity=AffectedEntity(type=targ.type, id=targ.id, changes={}),
-                game_state=gs,
+                gamesession=gs,
             )
         
         # Find the city in the current player's cities
@@ -52,7 +51,7 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
                     success=True,
                     message="City leveled up successfully.",
                     affected_entity=affected,
-                    game_state=gs
+                    gamesession=gs
                 )
             
             # Unknown city
@@ -60,7 +59,7 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
                 success=False,
                 message=f"City '{targ.id}' not found.",
                 affected_entity=AffectedEntity(type=targ.type, id=targ.id, changes={}),
-                game_state=gs,
+                gamesession=gs,
             )
         
     # Unknown cheat code
@@ -68,5 +67,5 @@ async def handle_cheat(game: Game, req: CheatRequest) -> CheatResponse:
         success=False,
         message=f"Unknown cheat code '{code}'.",
         affected_entity=AffectedEntity(type=targ.type, id=targ.id, changes={}),
-        game_state=gs,
+        gamesession=gs,
     )

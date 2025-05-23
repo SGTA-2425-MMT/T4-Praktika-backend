@@ -1,107 +1,76 @@
-from fastapi import HTTPException, Security
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwk, jwt
-from jose.utils import base64url_decode
-import httpx
-from typing import Dict, Any, Union
+# filepath: /Users/telmogoiko/vs-projects/SGTA/T4-Praktika-backend/app/auth.py
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, Optional
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from app.config import settings
+from app.db import db
+from bson import ObjectId
 
-bearer_scheme = HTTPBearer()
-_jwks: Dict[str, Any] = {}
+# Configuración de seguridad
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
 
-async def get_jwks():
-    global _jwks
-    if not _jwks:
-        url = (
-            f"{settings.KEYCLOAK_BASE_URL}/realms/"
-            f"{settings.KEYCLOAK_REALM}/protocol/openid-connect/certs"
-        )
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url)
-            res.raise_for_status()
-            _jwks = res.json()
-    return _jwks
+# Función para verificar contraseña
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
-async def verify_token(
-    http_auth: HTTPAuthorizationCredentials = Security(bearer_scheme)
-):
-    token = http_auth.credentials
-    jwks = await get_jwks()
+# Función para generar hash de contraseña
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
-    # ——— Signature verification ———
-    unverified_header = jwt.get_unverified_header(token)
-    kid = unverified_header["kid"]
-    key_dict = next((k for k in jwks["keys"] if k["kid"] == kid), None)
-    if not key_dict:
-        raise HTTPException(status_code=401, detail="Invalid token header")
-    public_key = jwk.construct(key_dict)
-    message, encoded_sig = token.rsplit(".", 1)
-    decoded_sig = base64url_decode(encoded_sig.encode('utf-8'))
-    if not public_key.verify(message.encode(), decoded_sig):
-        raise HTTPException(status_code=401, detail="Signature verification failed")
-
-    unverified_claims = jwt.get_unverified_claims(token)
-    actual_aud = unverified_claims.get("aud")
-    if not isinstance(actual_aud, str):
-        if isinstance(actual_aud, (list, tuple)) and actual_aud:
-            actual_aud = actual_aud[0]
-        else:
-            raise HTTPException(status_code=401, detail="Token missing audience")
-
-    actual_iss = unverified_claims.get("iss")
-    if not isinstance(actual_iss, str):
-        if isinstance(actual_iss, (list, tuple)) and actual_iss:
-            actual_iss = actual_iss[0]
-        else:
-            raise HTTPException(status_code=401, detail="Token missing issuer")
-
-    # ——— Decode without audience check ———
-    try:
-        claims = jwt.decode(
-            token,
-            public_key,
-            algorithms=[unverified_header["alg"]],
-            audience=actual_aud,
-            issuer=actual_iss,
-            options={
-                "verify_signature": True,
-                "verify_aud": False,
-                "exp": True
-            }
-        )
-    except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Token verification failed: {e}")
-
-    # 3) Manual audience check
-    aud: Union[str, list] = claims.get("aud")
-    valid_aud = settings.KEYCLOAK_CLIENT_ID
-    if isinstance(aud, list):
-        if valid_aud not in aud:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    f"Invalid audience: {aud}. Expected: {valid_aud}. "
-                    "You are using a token issued for the 'account' client. "
-                    "To fix: "
-                    "1) Make sure you authenticate against your application client (client_id: civilizatu-frontend-stable) in Keycloak, "
-                    "not the 'account' client. "
-                    "2) If using Postman or similar, set the correct client_id in the OAuth2 flow. "
-                    "3) If using a frontend, ensure it requests tokens for the correct client."
-                )
-            )
+# Función para crear token JWT
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        if aud != valid_aud:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    f"Invalid audience: {aud}. Expected: {valid_aud}. "
-                    "You are using a token issued for the 'account' client. "
-                    "To fix: "
-                    "1) Make sure you authenticate against your application client (client_id: civilizatu-frontend-stable) in Keycloak, "
-                    "not the 'account' client. "
-                    "2) If using Postman or similar, set the correct client_id in the OAuth2 flow. "
-                    "3) If using a frontend, ensure it requests tokens for the correct client."
-                )
-            )
+        expire = datetime.now(timezone.utc) + timedelta(minutes=60 * 24)  # 24 horas por defecto
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
 
-    return {**claims, "token": token}
+# Función para buscar usuario en la BD por nombre de usuario
+async def get_user_by_username(username: str):
+    user = await db.users.find_one({"username": username})
+    return user
+
+# Función para autenticar usuario
+async def authenticate_user(username: str, password: str):
+    user = await get_user_by_username(username)
+    if not user:
+        return False
+    if not verify_password(password, user["password_hash"]):
+        return False
+    return user
+
+# Función para obtener el usuario actual
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciales inválidas",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if user is None:
+        raise credentials_exception
+        
+    # Actualizar last_login
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"last_login": datetime.now(timezone.utc)}}
+    )
+    
+    return user

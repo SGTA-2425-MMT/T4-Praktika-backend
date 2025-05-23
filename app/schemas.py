@@ -12,22 +12,17 @@ class GameMap(BaseModel):
     size: MapSize
     explored: List[List[int]]
     visible_objects: List[Dict[str, Any]]
+    stored_tiles: List[List[Any]]
 
-class GameStatePlayer(BaseModel):
-    cities: List[Dict[str, Any]]
-    units: List[Dict[str, Any]]
-    technologies: List[Dict[str, Any]]
-    resources: Dict[str, Any]
 
-class GameState(BaseModel):
-    turn: int
-    current_player: str
-    player: GameStatePlayer
-    ai: GameStatePlayer
-    map: GameMap
 
 
 # ─── Auth & Profile ─────────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
 
 class TokenRequest(BaseModel):
     username: str
@@ -35,19 +30,18 @@ class TokenRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
-    expires_in: int
-    token_type: str
+    token_type: str = "bearer"
+    expires_in: int = 86400  # 24 horas en segundos
 
 class ProfileUpdate(BaseModel):
-    username: Optional[str]
-    email: Optional[str]
+    username: Optional[str] = None
+    email: Optional[str] = None
 
 class UserOut(BaseModel):
-    id: str = Field(alias="sub")
-    username: Optional[str]
-    email: Optional[str]
-    created_at: Optional[datetime] = None
+    id: str = Field(alias="_id")
+    username: str
+    email: str
+    created_at: datetime
     last_login: Optional[datetime] = None
 
     class Config:
@@ -75,7 +69,7 @@ class CheatResponse(BaseModel):
     success: bool
     message: str
     affected_entity: AffectedEntity
-    game_state: GameState
+    gamesession: str
 
     class Config:
         from_attributes = True
@@ -90,7 +84,7 @@ class PlayerAction(BaseModel):
 class GameCreate(BaseModel):
     name: str
     scenario_id: str
-    game_state: GameState
+    gamesession: str
 
 class GameOut(BaseModel):
     id: str = Field(alias="_id")
@@ -101,7 +95,7 @@ class GameOut(BaseModel):
     last_saved: datetime
     is_autosave: bool
     cheats_used: List[str]
-    game_state: GameState
+    gamesession: str
 
     class Config:
         validate_by_name = True
