@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Dict
@@ -56,7 +56,7 @@ async def register(
         "username": user.username,
         "email": user.email,
         "password_hash": hashed_password,
-        "created_at": datetime.now(tz=datetime.timezone.utc),
+        "created_at": datetime.now(tz=timezone.utc),
         "last_login": None,
         "is_active": True
     }
